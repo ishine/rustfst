@@ -1,7 +1,7 @@
 use anyhow::Result;
 
-use crate::algorithms::arc_filters::ArcFilter;
 use crate::algorithms::dfs_visit::dfs_visit;
+use crate::algorithms::tr_filters::TrFilter;
 use crate::algorithms::visitors::SccVisitor;
 use crate::algorithms::{Queue, QueueType};
 use crate::fst_properties::FstProperties;
@@ -12,6 +12,7 @@ use super::{
     natural_less, FifoQueue, LifoQueue, NaturalShortestFirstQueue, SccQueue, StateOrderQueue,
     TopOrderQueue, TrivialQueue,
 };
+use crate::Trs;
 
 #[derive(Debug)]
 pub struct AutoQueue {
@@ -19,14 +20,11 @@ pub struct AutoQueue {
 }
 
 impl AutoQueue {
-    pub fn new<F: ExpandedFst, A: ArcFilter<F::W>>(
+    pub fn new<W: Semiring, F: ExpandedFst<W>, A: TrFilter<W>>(
         fst: &F,
-        distance: Option<&Vec<F::W>>,
-        arc_filter: &A,
-    ) -> Result<Self>
-    where
-        F::W: 'static,
-    {
+        distance: Option<&Vec<W>>,
+        tr_filter: &A,
+    ) -> Result<Self> {
         let props = fst.properties()?;
 
         let queue: Box<dyn Queue>;
@@ -34,14 +32,14 @@ impl AutoQueue {
         if props.contains(FstProperties::TOP_SORTED) || fst.start().is_none() {
             queue = Box::new(StateOrderQueue::default());
         } else if props.contains(FstProperties::ACYCLIC) {
-            queue = Box::new(TopOrderQueue::new(fst, arc_filter));
+            queue = Box::new(TopOrderQueue::new(fst, tr_filter));
         } else if props.contains(FstProperties::UNWEIGHTED)
-            && F::W::properties().contains(SemiringProperties::IDEMPOTENT)
+            && W::properties().contains(SemiringProperties::IDEMPOTENT)
         {
             queue = Box::new(LifoQueue::default());
         } else {
             let mut scc_visitor = SccVisitor::new(fst, true, false);
-            dfs_visit(fst, &mut scc_visitor, arc_filter, false);
+            dfs_visit(fst, &mut scc_visitor, tr_filter, false);
             let sccs: Vec<_> = scc_visitor
                 .scc
                 .unwrap()
@@ -53,7 +51,7 @@ impl AutoQueue {
             let mut queue_types = vec![QueueType::TrivialQueue; n_sccs];
             let less = if distance.is_some()
                 && !distance.unwrap().is_empty()
-                && F::W::properties().contains(SemiringProperties::PATH)
+                && W::properties().contains(SemiringProperties::PATH)
             {
                 Some(natural_less)
             } else {
@@ -70,7 +68,7 @@ impl AutoQueue {
                 &mut queue_types,
                 &mut all_trivial,
                 &mut unweighted,
-                arc_filter,
+                tr_filter,
             )?;
 
             if unweighted {
@@ -101,9 +99,10 @@ impl AutoQueue {
     }
 
     pub fn scc_queue_type<
-        F: ExpandedFst,
-        C: Fn(&F::W, &F::W) -> Result<bool>,
-        A: ArcFilter<F::W>,
+        W: Semiring,
+        F: ExpandedFst<W>,
+        C: Fn(&W, &W) -> Result<bool>,
+        A: TrFilter<W>,
     >(
         fst: &F,
         sccs: &[usize],
@@ -111,7 +110,7 @@ impl AutoQueue {
         queue_types: &mut Vec<QueueType>,
         all_trivial: &mut bool,
         unweighted: &mut bool,
-        arc_filter: &A,
+        tr_filter: &A,
     ) -> Result<()> {
         *all_trivial = true;
         *unweighted = true;
@@ -121,19 +120,19 @@ impl AutoQueue {
             .for_each(|v| *v = QueueType::TrivialQueue);
 
         for state in 0..fst.num_states() {
-            for arc in unsafe { fst.arcs_iter_unchecked(state) } {
-                if !arc_filter.keep(arc) {
+            for tr in unsafe { fst.get_trs_unchecked(state).trs() } {
+                if !tr_filter.keep(tr) {
                     continue;
                 }
-                if sccs[state] == sccs[arc.nextstate] {
+                if sccs[state] == sccs[tr.nextstate] {
                     let queue_type = unsafe { queue_types.get_unchecked_mut(sccs[state]) };
-                    if compare.is_none() || compare.as_ref().unwrap()(&arc.weight, &F::W::one())? {
+                    if compare.is_none() || compare.as_ref().unwrap()(&tr.weight, &W::one())? {
                         *queue_type = QueueType::FifoQueue;
                     } else if *queue_type == QueueType::TrivialQueue
                         || *queue_type == QueueType::LifoQueue
                     {
-                        if !F::W::properties().contains(SemiringProperties::IDEMPOTENT)
-                            || (!arc.weight.is_zero() && !arc.weight.is_one())
+                        if !W::properties().contains(SemiringProperties::IDEMPOTENT)
+                            || (!tr.weight.is_zero() && !tr.weight.is_one())
                         {
                             *queue_type = QueueType::ShortestFirstQueue;
                         } else {
@@ -146,8 +145,8 @@ impl AutoQueue {
                     }
                 }
 
-                if !F::W::properties().contains(SemiringProperties::IDEMPOTENT)
-                    || (!arc.weight.is_zero() && !arc.weight.is_one())
+                if !W::properties().contains(SemiringProperties::IDEMPOTENT)
+                    || (!tr.weight.is_zero() && !tr.weight.is_one())
                 {
                     *unweighted = false;
                 }

@@ -1,9 +1,9 @@
-use crate::arc::Arc;
-use crate::fst_traits::{CoreFst, MutableFst};
-use crate::semirings::Semiring;
-use crate::Label;
-
 use std::cmp;
+
+use crate::fst_traits::MutableFst;
+use crate::semirings::Semiring;
+use crate::tr::Tr;
+use crate::Label;
 
 /// Turns a list of input labels and output labels into a linear FST.
 /// The only accepted path in the FST has for input `labels_input` and for output `labels_output`.
@@ -15,7 +15,7 @@ use std::cmp;
 /// # use rustfst::fst_impls::VectorFst;
 /// # use rustfst::semirings::{ProbabilityWeight, Semiring};
 /// # use rustfst::utils::transducer;
-/// # use rustfst::Arc;
+/// # use rustfst::Tr;
 /// let labels_input = vec![32, 43, 21];
 /// let labels_output = vec![53, 18, 89];
 ///
@@ -34,16 +34,16 @@ use std::cmp;
 /// fst_ref.set_start(s1).unwrap();
 /// fst_ref.set_final(s4, ProbabilityWeight::one()).unwrap();
 ///
-/// fst_ref.add_arc(s1, Arc::new(labels_input[0], labels_output[0], ProbabilityWeight::one(), s2)).unwrap();
-/// fst_ref.add_arc(s2, Arc::new(labels_input[1], labels_output[1], ProbabilityWeight::one(), s3)).unwrap();
-/// fst_ref.add_arc(s3, Arc::new(labels_input[2], labels_output[2], ProbabilityWeight::one(), s4)).unwrap();
+/// fst_ref.add_tr(s1, Tr::new(labels_input[0], labels_output[0], ProbabilityWeight::one(), s2)).unwrap();
+/// fst_ref.add_tr(s2, Tr::new(labels_input[1], labels_output[1], ProbabilityWeight::one(), s3)).unwrap();
+/// fst_ref.add_tr(s3, Tr::new(labels_input[2], labels_output[2], ProbabilityWeight::one(), s4)).unwrap();
 ///
 /// assert_eq!(fst, fst_ref);
 /// ```
-pub fn transducer<F: MutableFst>(
+pub fn transducer<W: Semiring, F: MutableFst<W>>(
     labels_input: &[Label],
     labels_output: &[Label],
-    weight: F::W,
+    weight: W,
 ) -> F {
     let max_size = cmp::max(labels_input.len(), labels_output.len());
 
@@ -60,11 +60,8 @@ pub fn transducer<F: MutableFst>(
         let new_state = fst.add_state();
 
         // Can't fail as the state has just been added
-        fst.add_arc(
-            state_cour,
-            Arc::new(*i, *o, <F as CoreFst>::W::one(), new_state),
-        )
-        .unwrap();
+        fst.add_tr(state_cour, Tr::new(*i, *o, W::one(), new_state))
+            .unwrap();
 
         state_cour = new_state;
     }
@@ -85,7 +82,7 @@ pub fn transducer<F: MutableFst>(
 /// use rustfst::fst_impls::VectorFst;
 /// use rustfst::semirings::{ProbabilityWeight, Semiring};
 /// use rustfst::utils::acceptor;
-/// use rustfst::Arc;
+/// use rustfst::Tr;
 ///
 /// let labels = vec![32, 43, 21];
 ///
@@ -104,14 +101,14 @@ pub fn transducer<F: MutableFst>(
 /// fst_ref.set_start(s1).unwrap();
 /// fst_ref.set_final(s4, ProbabilityWeight::one()).unwrap();
 ///
-/// fst_ref.add_arc(s1, Arc::new(labels[0], labels[0], ProbabilityWeight::one(), s2)).unwrap();
-/// fst_ref.add_arc(s2, Arc::new(labels[1], labels[1], ProbabilityWeight::one(), s3)).unwrap();
-/// fst_ref.add_arc(s3, Arc::new(labels[2], labels[2], ProbabilityWeight::one(), s4)).unwrap();
+/// fst_ref.add_tr(s1, Tr::new(labels[0], labels[0], ProbabilityWeight::one(), s2)).unwrap();
+/// fst_ref.add_tr(s2, Tr::new(labels[1], labels[1], ProbabilityWeight::one(), s3)).unwrap();
+/// fst_ref.add_tr(s3, Tr::new(labels[2], labels[2], ProbabilityWeight::one(), s4)).unwrap();
 ///
 /// assert_eq!(fst, fst_ref);
 ///
 /// ```
-pub fn acceptor<F: MutableFst>(labels: &[Label], weight: F::W) -> F {
+pub fn acceptor<W: Semiring, F: MutableFst<W>>(labels: &[Label], weight: W) -> F {
     let mut fst = F::new();
     let mut state_cour = fst.add_state();
 
@@ -122,11 +119,8 @@ pub fn acceptor<F: MutableFst>(labels: &[Label], weight: F::W) -> F {
         let new_state = fst.add_state();
 
         // Can't fail as the state has just been added
-        fst.add_arc(
-            state_cour,
-            Arc::new(*l, *l, <F as CoreFst>::W::one(), new_state),
-        )
-        .unwrap();
+        fst.add_tr(state_cour, Tr::new(*l, *l, W::one(), new_state))
+            .unwrap();
         state_cour = new_state;
     }
 
@@ -142,7 +136,7 @@ pub fn acceptor<F: MutableFst>(labels: &[Label], weight: F::W) -> F {
 ///
 /// - Create an unweighted linear acceptor :
 ///
-/// This will return a linear FST with one arc for each label given
+/// This will return a linear FST with one transition for each label given
 /// (same input and output, weight one).
 ///
 /// ```
@@ -152,7 +146,7 @@ pub fn acceptor<F: MutableFst>(labels: &[Label], weight: F::W) -> F {
 /// # use rustfst::fst_impls::VectorFst;
 /// # use rustfst::semirings::{ProbabilityWeight, Semiring};
 /// # use rustfst::utils::acceptor;
-/// # use rustfst::{Arc, FstPath};
+/// # use rustfst::{Tr, FstPath};
 /// let fst : VectorFst<ProbabilityWeight> = fst![1,2,3];
 /// assert_eq!(fst.paths_iter().count(), 1);
 /// assert_eq!(fst.paths_iter().next().unwrap(), fst_path![1,2,3]);
@@ -171,7 +165,7 @@ pub fn acceptor<F: MutableFst>(labels: &[Label], weight: F::W) -> F {
 /// # use rustfst::fst_impls::VectorFst;
 /// # use rustfst::semirings::{ProbabilityWeight, Semiring};
 /// # use rustfst::utils::transducer;
-/// # use rustfst::{Arc, FstPath};
+/// # use rustfst::{Tr, FstPath};
 /// let fst : VectorFst<ProbabilityWeight> = fst![1,2,3 => 1,2,4];
 /// assert_eq!(fst.paths_iter().count(), 1);
 /// assert_eq!(fst.paths_iter().next().unwrap(), fst_path![1,2,3 => 1,2,4]);
@@ -180,7 +174,7 @@ pub fn acceptor<F: MutableFst>(labels: &[Label], weight: F::W) -> F {
 ///
 /// - Create a weighted linear acceptor :
 ///
-/// This will return a linear FST with one arc for each label given
+/// This will return a linear FST with one transition for each label given
 /// (same input and output, weight one).
 ///
 /// ```
@@ -190,7 +184,7 @@ pub fn acceptor<F: MutableFst>(labels: &[Label], weight: F::W) -> F {
 /// # use rustfst::fst_impls::VectorFst;
 /// # use rustfst::semirings::{ProbabilityWeight, Semiring};
 /// # use rustfst::utils::acceptor;
-/// # use rustfst::{Arc, FstPath};
+/// # use rustfst::{Tr, FstPath};
 /// let fst : VectorFst<ProbabilityWeight> = fst![1,2,3; 0.2];
 /// assert_eq!(fst.paths_iter().count(), 1);
 /// assert_eq!(fst.paths_iter().next().unwrap(), fst_path![1,2,3; 0.2]);
@@ -209,7 +203,7 @@ pub fn acceptor<F: MutableFst>(labels: &[Label], weight: F::W) -> F {
 /// # use rustfst::fst_impls::VectorFst;
 /// # use rustfst::semirings::{ProbabilityWeight, Semiring};
 /// # use rustfst::utils::transducer;
-/// # use rustfst::{Arc, FstPath};
+/// # use rustfst::{Tr, FstPath};
 /// let fst : VectorFst<ProbabilityWeight> = fst![1,2,3 => 1,2,4; 0.2];
 /// assert_eq!(fst.paths_iter().count(), 1);
 /// assert_eq!(fst.paths_iter().next().unwrap(), fst_path![1,2,3 => 1,2,4; 0.2]);

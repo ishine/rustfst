@@ -2,9 +2,10 @@ use anyhow::{bail, Result};
 
 use crate::fst_path::FstPath;
 use crate::fst_traits::{Fst, PathsIterator};
+use crate::semirings::Semiring;
 
 /// Decode a linear FST to retrieves the only path recognized by it. A path is composed of the
-/// input symbols, the output symbols and the weight (multiplication of the weights of the arcs
+/// input symbols, the output symbols and the weight (multiplication of the weights of the trs
 /// of the path).
 ///
 /// # Example
@@ -14,7 +15,7 @@ use crate::fst_traits::{Fst, PathsIterator};
 /// # use rustfst::fst_impls::VectorFst;
 /// # use rustfst::semirings::{BooleanWeight, Semiring};
 /// # use rustfst::utils::{transducer, decode_linear_fst};
-/// # use rustfst::Arc;
+/// # use rustfst::Tr;
 /// # use rustfst::FstPath;
 /// let labels_input = vec![32, 43, 21];
 /// let labels_output = vec![53, 18, 89];
@@ -25,7 +26,7 @@ use crate::fst_traits::{Fst, PathsIterator};
 ///
 /// assert_eq!(path, FstPath::new(labels_input, labels_output, BooleanWeight::one()));
 /// ```
-pub fn decode_linear_fst<F: Fst>(fst: &F) -> Result<FstPath<F::W>> {
+pub fn decode_linear_fst<W: Semiring, F: Fst<W>>(fst: &F) -> Result<FstPath<W>> {
     let mut it_path = fst.paths_iter();
     let path = it_path.next().unwrap_or_default();
     if it_path.next().is_some() {
@@ -37,10 +38,10 @@ pub fn decode_linear_fst<F: Fst>(fst: &F) -> Result<FstPath<F::W>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arc::Arc;
     use crate::fst_impls::VectorFst;
     use crate::fst_traits::MutableFst;
     use crate::semirings::{BooleanWeight, Semiring};
+    use crate::tr::Tr;
     use crate::utils::{acceptor, transducer};
 
     #[test]
@@ -99,8 +100,8 @@ mod tests {
         let s2 = fst.add_state();
         fst.set_start(s1)?;
         fst.set_final(s2, BooleanWeight::one())?;
-        fst.add_arc(s1, Arc::new(10, 10, BooleanWeight::one(), s2))?;
-        fst.add_arc(s1, Arc::new(10, 10, BooleanWeight::one(), s2))?;
+        fst.add_tr(s1, Tr::new(10, 10, BooleanWeight::one(), s2))?;
+        fst.add_tr(s1, Tr::new(10, 10, BooleanWeight::one(), s2))?;
 
         assert!(decode_linear_fst(&fst).is_err());
         Ok(())

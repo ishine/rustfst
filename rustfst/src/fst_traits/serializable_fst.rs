@@ -1,19 +1,18 @@
+use std::fs::File;
+use std::io::{BufWriter, LineWriter, Write};
 use std::path::Path;
 
 use anyhow::Result;
+use unsafe_unwrap::UnsafeUnwrap;
 
-use crate::fst_traits::{ExpandedFst, FinalStatesIterator};
+use crate::fst_traits::ExpandedFst;
 use crate::parsers::text_fst::ParsedTextFst;
-use crate::semirings::{Semiring, SerializableSemiring};
+use crate::semirings::SerializableSemiring;
+use crate::Trs;
 use crate::{DrawingConfig, StateId};
-use std::fs::File;
-use std::io::{BufWriter, LineWriter, Write};
 
 /// Trait definining the methods an Fst must implement to be serialized and deserialized.
-pub trait SerializableFst: ExpandedFst
-where
-    Self::W: SerializableSemiring,
-{
+pub trait SerializableFst<W: SerializableSemiring>: ExpandedFst<W> {
     /// String identifying the type of the FST. Will be used when serialiing and
     /// deserializing an FST in binary format.
     fn fst_type() -> String;
@@ -28,7 +27,7 @@ where
     // TEXT
 
     /// Turns a generic wFST format into the one of the wFST.
-    fn from_parsed_fst_text(parsed_fst_text: ParsedTextFst<Self::W>) -> Result<Self>;
+    fn from_parsed_fst_text(parsed_fst_text: ParsedTextFst<W>) -> Result<Self>;
 
     /// Deserializes a wFST in text from a path and returns a loaded wFST.
     fn from_text_string(fst_string: &str) -> Result<Self> {
@@ -108,15 +107,12 @@ where
     }
 }
 
-fn draw_single_fst_state<F: SerializableFst, W: Write>(
+fn draw_single_fst_state<S: SerializableSemiring, F: SerializableFst<S>, W: Write>(
     fst: &F,
     writer: &mut W,
     state_id: StateId,
     config: &DrawingConfig,
-) -> Result<()>
-where
-    F::W: SerializableSemiring,
-{
+) -> Result<()> {
     let opt_isymt = fst.input_symbols();
     let opt_osymt = fst.output_symbols();
 
@@ -139,24 +135,24 @@ where
 
     writeln!(writer, " fontsize = {}]", config.fontsize)?;
 
-    for arc in fst.arcs_iter(state_id).unwrap() {
-        write!(writer, "\t{} -> {}", state_id, arc.nextstate)?;
+    for tr in fst.get_trs(state_id).unwrap().trs() {
+        write!(writer, "\t{} -> {}", state_id, tr.nextstate)?;
 
         let ilabel = opt_isymt.clone().map_or_else(
-            || Ok(format!("{}", arc.ilabel)),
+            || Ok(format!("{}", tr.ilabel)),
             |symt| {
-                symt.get_symbol(arc.ilabel)
+                symt.get_symbol(tr.ilabel)
                     .map(|v| v.to_string())
-                    .ok_or_else(|| format_err!("Missing {} in input SymbolTable", arc.ilabel))
+                    .ok_or_else(|| format_err!("Missing {} in input SymbolTable", tr.ilabel))
             },
         )?;
 
         let olabel = opt_osymt.clone().map_or_else(
-            || Ok(format!("{}", arc.olabel)),
+            || Ok(format!("{}", tr.olabel)),
             |symt| {
-                symt.get_symbol(arc.olabel)
+                symt.get_symbol(tr.olabel)
                     .map(|v| v.to_string())
-                    .ok_or_else(|| format_err!("Missing {} in output SymbolTable", arc.olabel))
+                    .ok_or_else(|| format_err!("Missing {} in output SymbolTable", tr.olabel))
             },
         )?;
 
@@ -165,8 +161,8 @@ where
             write!(writer, ":{}", olabel)?;
         }
 
-        if config.print_weight && (config.show_weight_one || !arc.weight.is_one()) {
-            write!(writer, "/{}", arc.weight)?;
+        if config.print_weight && (config.show_weight_one || !tr.weight.is_one()) {
+            write!(writer, "/{}", tr.weight)?;
         }
         writeln!(writer, "\", fontsize = {}];", config.fontsize)?;
     }

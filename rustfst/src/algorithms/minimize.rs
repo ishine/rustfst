@@ -3,52 +3,54 @@ use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::marker::PhantomData;
 
-use binary_heap_plus::BinaryHeap;
 use anyhow::Result;
+use binary_heap_plus::BinaryHeap;
 use stable_bst::TreeMap;
 
-use crate::algorithms::arc_compares::ilabel_compare;
-use crate::algorithms::arc_mappers::QuantizeMapper;
-use crate::algorithms::arc_unique;
-use crate::algorithms::factor_iterators::GallicFactorLeft;
+use crate::algorithms::factor_weight::factor_iterators::GallicFactorLeft;
+use crate::algorithms::factor_weight::{factor_weight, FactorWeightOptions, FactorWeightType};
 use crate::algorithms::partition::Partition;
 use crate::algorithms::queues::LifoQueue;
 use crate::algorithms::reverse;
+use crate::algorithms::tr_compares::ilabel_compare;
+use crate::algorithms::tr_mappers::QuantizeMapper;
+use crate::algorithms::tr_unique;
 use crate::algorithms::weight_converters::{FromGallicConverter, ToGallicConverter};
 use crate::algorithms::Queue;
 use crate::algorithms::{
-    arc_map, arc_sort, connect, decode, encode, factor_weight, push_weights, weight_convert,
-    FactorWeightOptions, FactorWeightType, ReweightType,
+    connect,
+    encode::{decode, encode},
+    push_weights, tr_map, tr_sort, weight_convert, ReweightType,
 };
 use crate::fst_impls::VectorFst;
 use crate::fst_properties::FstProperties;
-use crate::fst_traits::ArcIterator;
 use crate::fst_traits::{AllocableFst, CoreFst, ExpandedFst, Fst, MutableFst};
 use crate::semirings::{
     GallicWeightLeft, Semiring, SemiringProperties, WeaklyDivisibleSemiring, WeightQuantize,
 };
-use crate::Arc;
-use crate::StateId;
+use crate::Tr;
 use crate::EPS_LABEL;
 use crate::KDELTA;
 use crate::NO_STATE_ID;
+use crate::{StateId, Trs};
 
 /// In place minimization of deterministic weighted automata and transducers,
 /// and also non-deterministic ones if they use an idempotent semiring.
 /// For transducers, the algorithm produces a compact factorization of the minimal transducer.
-pub fn minimize<F>(ifst: &mut F, allow_nondet: bool) -> Result<()>
+pub fn minimize<W, F>(ifst: &mut F, allow_nondet: bool) -> Result<()>
 where
-    F: MutableFst + ExpandedFst + AllocableFst,
-    F::W: WeaklyDivisibleSemiring + WeightQuantize + 'static,
-    <<F as CoreFst>::W as Semiring>::ReverseWeight: 'static,
+    F: MutableFst<W> + ExpandedFst<W> + AllocableFst<W>,
+    W: WeaklyDivisibleSemiring + WeightQuantize + 'static,
+    <W as Semiring>::ReverseWeight: 'static,
 {
     let props = ifst.properties()?;
 
     let allow_acyclic_minimization = if props.contains(FstProperties::I_DETERMINISTIC) {
         true
     } else {
-        if !F::W::properties().contains(SemiringProperties::IDEMPOTENT) {
+        if !W::properties().contains(SemiringProperties::IDEMPOTENT) {
             bail!("Cannot minimize a non-deterministic FST over a non-idempotent semiring")
         } else if !allow_nondet {
             bail!("Refusing to minimize a non-deterministic FST with allow_nondet = false")
@@ -60,10 +62,10 @@ where
     if !props.contains(FstProperties::ACCEPTOR) {
         // Weighted transducer
         let mut to_gallic = ToGallicConverter {};
-        let mut gfst: VectorFst<GallicWeightLeft<F::W>> = weight_convert(ifst, &mut to_gallic)?;
+        let mut gfst: VectorFst<GallicWeightLeft<W>> = weight_convert(ifst, &mut to_gallic)?;
         push_weights(&mut gfst, ReweightType::ReweightToInitial, false)?;
         let mut quantize_mapper = QuantizeMapper {};
-        arc_map(&mut gfst, &mut quantize_mapper)?;
+        tr_map(&mut gfst, &mut quantize_mapper)?;
         let encode_table = encode(&mut gfst, true, true)?;
         acceptor_minimize(&mut gfst, allow_acyclic_minimization)?;
         decode(&mut gfst, encode_table)?;
@@ -76,7 +78,7 @@ where
             increment_final_olabel: false,
         };
         let fwfst: VectorFst<_> =
-            factor_weight::<VectorFst<GallicWeightLeft<F::W>>, _, _, GallicFactorLeft<F::W>>(
+            factor_weight::<_, VectorFst<GallicWeightLeft<W>>, _, _, GallicFactorLeft<W>>(
                 &gfst,
                 factor_opts,
             )?;
@@ -89,7 +91,7 @@ where
         // Weighted acceptor
         push_weights(ifst, ReweightType::ReweightToInitial, false)?;
         let mut quantize_mapper = QuantizeMapper {};
-        arc_map(ifst, &mut quantize_mapper)?;
+        tr_map(ifst, &mut quantize_mapper)?;
         let encode_table = encode(ifst, true, true)?;
         acceptor_minimize(ifst, allow_acyclic_minimization)?;
         decode(ifst, encode_table)
@@ -99,14 +101,10 @@ where
     }
 }
 
-fn acceptor_minimize<F: MutableFst + ExpandedFst>(
+fn acceptor_minimize<W: Semiring, F: MutableFst<W> + ExpandedFst<W>>(
     ifst: &mut F,
     allow_acyclic_minimization: bool,
-) -> Result<()>
-where
-    <<F as CoreFst>::W as Semiring>::ReverseWeight: 'static,
-    F::W: 'static,
-{
+) -> Result<()> {
     let props = ifst.properties()?;
     if !props.contains(FstProperties::ACCEPTOR | FstProperties::UNWEIGHTED) {
         bail!("FST is not an unweighted acceptor");
@@ -120,7 +118,7 @@ where
 
     if allow_acyclic_minimization && props.contains(FstProperties::ACYCLIC) {
         // Acyclic minimization
-        arc_sort(ifst, ilabel_compare);
+        tr_sort(ifst, ilabel_compare);
         let minimizer = AcyclicMinimizer::new(ifst)?;
         merge_states(minimizer.get_partition(), ifst)?;
     } else {
@@ -128,12 +126,12 @@ where
         merge_states(p, ifst)?;
     }
 
-    arc_unique(ifst);
+    tr_unique(ifst);
 
     Ok(())
 }
 
-fn merge_states<F: MutableFst + ExpandedFst>(partition: Partition, fst: &mut F) -> Result<()> {
+fn merge_states<W: Semiring, F: MutableFst<W>>(partition: Partition, fst: &mut F) -> Result<()> {
     let mut state_map = vec![None; partition.num_classes()];
     for (i, s) in state_map
         .iter_mut()
@@ -146,20 +144,22 @@ fn merge_states<F: MutableFst + ExpandedFst>(partition: Partition, fst: &mut F) 
     for c in 0..partition.num_classes() {
         for s in partition.iter(c) {
             if s == state_map[c].unwrap() {
-                for arc in fst.arcs_iter_mut(s)? {
-                    arc.nextstate = state_map[partition.get_class_id(arc.nextstate)].unwrap();
+                for tr in fst.tr_iter_mut(s)? {
+                    tr.nextstate = state_map[partition.get_class_id(tr.nextstate)].unwrap();
                 }
             } else {
-                let arcs: Vec<_> = fst
-                    .arcs_iter(s)?
+                let trs: Vec<_> = fst
+                    .get_trs(s)?
+                    .trs()
+                    .iter()
                     .cloned()
-                    .map(|mut arc| {
-                        arc.nextstate = state_map[partition.get_class_id(arc.nextstate)].unwrap();
-                        arc
+                    .map(|mut tr| {
+                        tr.nextstate = state_map[partition.get_class_id(tr.nextstate)].unwrap();
+                        tr
                     })
                     .collect();
-                for arc in arcs.into_iter() {
-                    fst.add_arc(state_map[c].unwrap(), arc)?;
+                for tr in trs.into_iter() {
+                    fst.add_tr(state_map[c].unwrap(), tr)?;
                 }
             }
         }
@@ -171,7 +171,7 @@ fn merge_states<F: MutableFst + ExpandedFst>(partition: Partition, fst: &mut F) 
 }
 
 // Compute the height (distance) to final state
-pub fn fst_depth<F: Fst>(
+pub fn fst_depth<W: Semiring, F: Fst<W>>(
     fst: &F,
     state_id_cour: StateId,
     accessible_states: &mut HashSet<StateId>,
@@ -185,8 +185,8 @@ pub fn fst_depth<F: Fst>(
     }
 
     let mut height_cur_state = 0;
-    for arc in fst.arcs_iter(state_id_cour)? {
-        let nextstate = arc.nextstate;
+    for tr in fst.get_trs(state_id_cour)?.trs() {
+        let nextstate = tr.nextstate;
 
         if !accessible_states.contains(&nextstate) {
             fst_depth(
@@ -212,7 +212,7 @@ struct AcyclicMinimizer {
 }
 
 impl AcyclicMinimizer {
-    pub fn new<F: MutableFst + ExpandedFst>(fst: &mut F) -> Result<Self> {
+    pub fn new<W: Semiring, F: MutableFst<W>>(fst: &mut F) -> Result<Self> {
         let mut c = Self {
             partition: Partition::empty_new(),
         };
@@ -221,7 +221,7 @@ impl AcyclicMinimizer {
         Ok(c)
     }
 
-    fn initialize<F: MutableFst + ExpandedFst>(&mut self, fst: &mut F) -> Result<()> {
+    fn initialize<W: Semiring, F: MutableFst<W>>(&mut self, fst: &mut F) -> Result<()> {
         let mut accessible_state = HashSet::new();
         let mut fully_examined_states = HashSet::new();
         let mut heights = Vec::new();
@@ -241,13 +241,14 @@ impl AcyclicMinimizer {
         Ok(())
     }
 
-    fn refine<F: MutableFst + ExpandedFst>(&mut self, fst: &mut F) {
+    fn refine<W: Semiring, F: MutableFst<W>>(&mut self, fst: &mut F) {
         let state_cmp = StateComparator {
             fst,
             // This clone is necessary for the moment because the partition is modified while
             // still needing the StateComparator.
             // TODO: Find a way to remove the clone.
             partition: self.partition.clone(),
+            w: PhantomData,
         };
 
         let height = self.partition.num_classes();
@@ -299,16 +300,16 @@ impl AcyclicMinimizer {
     }
 }
 
-struct StateComparator<'a, F: MutableFst + ExpandedFst> {
+struct StateComparator<'a, W: Semiring, F: MutableFst<W>> {
     fst: &'a F,
     partition: Partition,
+    w: PhantomData<W>,
 }
 
-impl<'a, F: MutableFst + ExpandedFst> StateComparator<'a, F> {
+impl<'a, W: Semiring, F: MutableFst<W>> StateComparator<'a, W, F> {
     fn do_compare(&self, x: StateId, y: StateId) -> Result<bool> {
-        let zero = F::W::zero();
-        let xfinal = self.fst.final_weight(x)?.unwrap_or_else(|| &zero);
-        let yfinal = self.fst.final_weight(y)?.unwrap_or_else(|| &zero);
+        let xfinal = self.fst.final_weight(x)?.unwrap_or_else(W::zero);
+        let yfinal = self.fst.final_weight(y)?.unwrap_or_else(W::zero);
 
         if xfinal < yfinal {
             return Ok(true);
@@ -316,15 +317,17 @@ impl<'a, F: MutableFst + ExpandedFst> StateComparator<'a, F> {
             return Ok(false);
         }
 
-        if self.fst.num_arcs(x)? < self.fst.num_arcs(y)? {
+        if self.fst.num_trs(x)? < self.fst.num_trs(y)? {
             return Ok(true);
         }
-        if self.fst.num_arcs(x)? > self.fst.num_arcs(y)? {
+        if self.fst.num_trs(x)? > self.fst.num_trs(y)? {
             return Ok(false);
         }
 
-        let it_x = self.fst.arcs_iter(x)?;
-        let it_y = self.fst.arcs_iter(y)?;
+        let it_x_owner = self.fst.get_trs(x)?;
+        let it_x = it_x_owner.trs().iter();
+        let it_y_owner = self.fst.get_trs(y)?;
+        let it_y = it_y_owner.trs().iter();
 
         for (arc1, arc2) in it_x.zip(it_y) {
             if arc1.ilabel < arc2.ilabel {
@@ -365,7 +368,7 @@ impl<'a, F: MutableFst + ExpandedFst> StateComparator<'a, F> {
     }
 }
 
-fn pre_partition<W: Semiring, F: MutableFst<W = W> + ExpandedFst<W = W>>(
+fn pre_partition<W: Semiring, F: MutableFst<W>>(
     fst: &F,
     partition: &mut Partition,
     queue: &mut LifoQueue,
@@ -378,8 +381,8 @@ fn pre_partition<W: Semiring, F: MutableFst<W = W> + ExpandedFst<W = W>>(
         let mut hash_to_class_final = HashMap::<Vec<usize>, StateId>::new();
 
         for s in 0..num_states {
-            let ilabels: Vec<usize> = unsafe { fst.arcs_iter_unchecked(s) }
-                .map(|arc| arc.ilabel)
+            let ilabels: Vec<usize> = unsafe { fst.get_trs_unchecked(s).trs().iter() }
+                .map(|tr| tr.ilabel)
                 .collect();
 
             let this_map = if unsafe { fst.is_final_unchecked(s) } {
@@ -410,16 +413,10 @@ fn pre_partition<W: Semiring, F: MutableFst<W = W> + ExpandedFst<W = W>>(
     }
 }
 
-fn cyclic_minimize<W: Semiring, F: MutableFst<W = W> + ExpandedFst<W = W>>(
-    fst: &mut F,
-) -> Result<Partition>
-where
-    W: 'static,
-    <W as Semiring>::ReverseWeight: 'static,
-{
+fn cyclic_minimize<W: Semiring, F: MutableFst<W>>(fst: &mut F) -> Result<Partition> {
     // Initialize
     let mut tr: VectorFst<W::ReverseWeight> = reverse(fst)?;
-    arc_sort(&mut tr, ilabel_compare);
+    tr_sort(&mut tr, ilabel_compare);
     let mut partition = Partition::new(tr.num_states() - 1);
     let mut queue = LifoQueue::default();
     pre_partition(fst, &mut partition, &mut queue);
@@ -431,7 +428,7 @@ where
 
         // TODO: Avoid this clone :o
         // Here we need to pointer to the partition that is valid even if the partition changes.
-        let comp = ArcIterCompare {
+        let comp = TrIterCompare {
             partition: partition.clone(),
         };
         let mut aiter_queue = BinaryHeap::new_by(|v1, v2| {
@@ -444,10 +441,11 @@ where
 
         // Split
         for s in partition.iter(c) {
-            if tr.num_arcs(s + 1)? > 0 {
-                aiter_queue.push(ArcsIterCollected {
+            if tr.num_trs(s + 1)? > 0 {
+                aiter_queue.push(TrsIterCollected {
                     idx: 0,
-                    arcs: tr.arcs_iter(s + 1)?.collect(),
+                    trs: tr.get_trs(s + 1)?,
+                    w: PhantomData,
                 });
             }
         }
@@ -458,9 +456,9 @@ where
             if aiter.done() {
                 continue;
             }
-            let arc = aiter.peek().unwrap();
-            let from_state = arc.nextstate - 1;
-            let from_label = arc.ilabel;
+            let tr = aiter.peek().unwrap();
+            let from_state = tr.nextstate - 1;
+            let from_label = tr.ilabel;
             if prev_label != from_label as i32 {
                 partition.finalize_split(&mut Some(&mut queue));
             }
@@ -482,18 +480,19 @@ where
     Ok(partition)
 }
 
-struct ArcsIterCollected<'a, W: Semiring> {
+struct TrsIterCollected<W: Semiring, T: Trs<W>> {
     idx: usize,
-    arcs: Vec<&'a Arc<W>>,
+    trs: T,
+    w: PhantomData<W>,
 }
 
-impl<'a, W: Semiring> ArcsIterCollected<'a, W> {
-    fn peek(&self) -> Option<&&Arc<W>> {
-        self.arcs.get(self.idx)
+impl<W: Semiring, T: Trs<W>> TrsIterCollected<W, T> {
+    fn peek(&self) -> Option<&Tr<W>> {
+        self.trs.trs().get(self.idx)
     }
 
     fn done(&self) -> bool {
-        self.idx >= self.arcs.len()
+        self.idx >= self.trs.len()
     }
 
     fn next(&mut self) {
@@ -502,14 +501,18 @@ impl<'a, W: Semiring> ArcsIterCollected<'a, W> {
 }
 
 #[derive(Clone)]
-struct ArcIterCompare {
+struct TrIterCompare {
     partition: Partition,
 }
 
-impl ArcIterCompare {
-    fn compare<'a, 'b, W>(&self, x: &ArcsIterCollected<'a, W>, y: &ArcsIterCollected<'b, W>) -> bool
+impl TrIterCompare {
+    fn compare<W: Semiring, T: Trs<W>>(
+        &self,
+        x: &TrsIterCollected<W, T>,
+        y: &TrsIterCollected<W, T>,
+    ) -> bool
     where
-        W: Semiring + 'static,
+        W: Semiring,
     {
         let xarc = x.peek().unwrap();
         let yarc = y.peek().unwrap();

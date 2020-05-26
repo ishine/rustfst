@@ -1,9 +1,10 @@
-use crate::arc::Arc;
-use crate::fst_traits::{ArcIterator, ExpandedFst, Fst};
+use crate::fst_traits::{ExpandedFst, Fst};
 use crate::semirings::Semiring;
-use crate::StateId;
+use crate::tr::Tr;
+use crate::{StateId, Trs};
 
-use crate::algorithms::arc_filters::ArcFilter;
+use crate::algorithms::tr_filters::TrFilter;
+use std::marker::PhantomData;
 use unsafe_unwrap::UnsafeUnwrap;
 
 #[derive(PartialOrd, PartialEq, Copy, Clone)]
@@ -16,85 +17,88 @@ enum DfsStateColor {
     Black,
 }
 
-pub trait Visitor<'a, F: Fst> {
+pub trait Visitor<'a, W: Semiring, F: Fst<W>> {
     /// Invoked before DFS visit.
     fn init_visit(&mut self, fst: &'a F);
 
     /// Invoked when state discovered (2nd arg is DFS tree root).
     fn init_state(&mut self, s: StateId, root: StateId) -> bool;
 
-    /// Invoked when tree arc to white/undiscovered state examined.
-    fn tree_arc(&mut self, s: StateId, arc: &Arc<F::W>) -> bool;
+    /// Invoked when tree transition to white/undiscovered state examined.
+    fn tree_tr(&mut self, s: StateId, tr: &Tr<W>) -> bool;
 
-    /// Invoked when back arc to grey/unfinished state examined.
-    fn back_arc(&mut self, s: StateId, arc: &Arc<F::W>) -> bool;
+    /// Invoked when back transition to grey/unfinished state examined.
+    fn back_tr(&mut self, s: StateId, tr: &Tr<W>) -> bool;
 
-    /// Invoked when forward or cross arc to black/finished state examined.
-    fn forward_or_cross_arc(&mut self, s: StateId, arc: &Arc<F::W>) -> bool;
+    /// Invoked when forward or cross transition to black/finished state examined.
+    fn forward_or_cross_tr(&mut self, s: StateId, tr: &Tr<W>) -> bool;
 
     /// Invoked when state finished ('s' is tree root, 'parent' is kNoStateId,
-    /// and 'arc' is nullptr).
-    fn finish_state(&mut self, s: StateId, parent: Option<StateId>, arc: Option<&Arc<F::W>>);
+    /// and 'tr' is nullptr).
+    fn finish_state(&mut self, s: StateId, parent: Option<StateId>, tr: Option<&Tr<W>>);
 
     /// Invoked after DFS visit.
     fn finish_visit(&mut self);
 }
 
-struct DfsState<'a, W, AI>
+struct DfsState<W, TRS>
 where
-    W: Semiring + 'a,
-    AI: Iterator<Item = &'a Arc<W>> + Clone,
+    W: Semiring,
+    TRS: Trs<W>,
 {
     state_id: StateId,
-    arc_iter: OpenFstIterator<AI>,
+    tr_iter: OpenFstIterator<W, TRS>,
+    w: PhantomData<W>,
 }
 
-impl<'a, W, AI> DfsState<'a, W, AI>
-where
-    W: Semiring + 'a,
-    AI: Iterator<Item = &'a Arc<W>> + Clone,
-{
+impl<W: Semiring, TRS: Trs<W>> DfsState<W, TRS> {
     #[inline]
-    pub fn new<F: ArcIterator<'a, Iter = AI, W = W>>(fst: &'a F, s: StateId) -> Self {
+    pub fn new<F: Fst<W, TRS = TRS>>(fst: &F, s: StateId) -> Self {
         Self {
             state_id: s,
-            arc_iter: OpenFstIterator::new(unsafe { fst.arcs_iter_unchecked(s) }),
+            tr_iter: OpenFstIterator::new(unsafe { fst.get_trs_unchecked(s) }),
+            w: PhantomData,
         }
     }
 }
 
-struct OpenFstIterator<I: Iterator> {
-    iter: I,
-    e: Option<I::Item>,
+struct OpenFstIterator<W: Semiring, TRS: Trs<W>> {
+    trs: TRS,
+    pos: usize,
+    w: PhantomData<W>,
 }
 
-impl<I: Iterator> OpenFstIterator<I> {
+impl<W: Semiring, TRS: Trs<W>> OpenFstIterator<W, TRS> {
     #[inline]
-    fn new(mut iter: I) -> Self {
-        let e = iter.next();
-        Self { iter, e }
+    fn new(trs: TRS) -> Self {
+        Self {
+            trs,
+            pos: 0,
+            w: PhantomData,
+        }
     }
 
     #[inline]
-    fn value(&self) -> &I::Item {
-        unsafe { self.e.as_ref().unsafe_unwrap() }
+    fn value(&self) -> &Tr<W> {
+        unsafe { self.trs.trs().get_unchecked(self.pos) }
     }
 
     #[inline]
     fn done(&self) -> bool {
-        self.e.is_none()
+        let n = self.trs.trs().len();
+        self.pos >= n
     }
 
     #[inline]
     fn next(&mut self) {
-        self.e = self.iter.next();
+        self.pos += 1;
     }
 }
 
-pub fn dfs_visit<'a, F: Fst + ExpandedFst, V: Visitor<'a, F>, A: ArcFilter<F::W>>(
+pub fn dfs_visit<'a, W: Semiring, F: ExpandedFst<W>, V: Visitor<'a, W, F>, A: TrFilter<W>>(
     fst: &'a F,
     visitor: &mut V,
-    arc_filter: &A,
+    tr_filter: &A,
     access_only: bool,
 ) {
     visitor.init_visit(fst);
@@ -123,42 +127,42 @@ pub fn dfs_visit<'a, F: Fst + ExpandedFst, V: Visitor<'a, F>, A: ArcFilter<F::W>
         while !state_stack.is_empty() {
             let dfs_state = unsafe { state_stack.last_mut().unsafe_unwrap() };
             let s = dfs_state.state_id;
-            let aiter = &mut dfs_state.arc_iter;
+            let aiter = &mut dfs_state.tr_iter;
             if !dfs || aiter.done() {
                 state_color[s] = DfsStateColor::Black;
                 state_stack.pop();
                 if !state_stack.is_empty() {
                     let parent_state = unsafe { state_stack.last_mut().unsafe_unwrap() };
-                    let piter = &mut parent_state.arc_iter;
-                    visitor.finish_state(s, Some(parent_state.state_id), Some(*piter.value()));
+                    let piter = &mut parent_state.tr_iter;
+                    visitor.finish_state(s, Some(parent_state.state_id), Some(piter.value()));
                     piter.next();
                 } else {
                     visitor.finish_state(s, None, None);
                 }
                 continue;
             }
-            let arc = aiter.value();
-            let next_color = state_color[arc.nextstate];
-            if !(arc_filter.keep(arc)) {
+            let tr = aiter.value();
+            let next_color = state_color[tr.nextstate];
+            if !(tr_filter.keep(tr)) {
                 aiter.next();
                 continue;
             }
             match next_color {
                 DfsStateColor::White => {
-                    dfs = visitor.tree_arc(s, arc);
+                    dfs = visitor.tree_tr(s, tr);
                     if !dfs {
                         break;
                     }
-                    state_color[arc.nextstate] = DfsStateColor::Grey;
-                    state_stack_next = Some(DfsState::new(fst, arc.nextstate));
-                    dfs = visitor.init_state(arc.nextstate, root);
+                    state_color[tr.nextstate] = DfsStateColor::Grey;
+                    state_stack_next = Some(DfsState::new(fst, tr.nextstate));
+                    dfs = visitor.init_state(tr.nextstate, root);
                 }
                 DfsStateColor::Grey => {
-                    dfs = visitor.back_arc(s, arc);
+                    dfs = visitor.back_tr(s, tr);
                     aiter.next();
                 }
                 DfsStateColor::Black => {
-                    dfs = visitor.forward_or_cross_arc(s, arc);
+                    dfs = visitor.forward_or_cross_tr(s, tr);
                     aiter.next();
                 }
             };

@@ -5,14 +5,14 @@ use std::fs::{read, File};
 use std::io::{BufWriter, LineWriter, Write};
 use std::path::Path;
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use itertools::Itertools;
 
 use crate::parsers::bin_symt::nom_parser::{parse_symbol_table_bin, write_bin_symt};
 use crate::parsers::text_symt::parsed_text_symt::ParsedTextSymt;
 use crate::{Label, Symbol, EPS_SYMBOL};
 
-/// A symbol table stores a bidirectional mapping between arc labels and "symbols" (strings).
+/// A symbol table stores a bidirectional mapping between transition labels and "symbols" (strings).
 #[derive(PartialEq, Debug, Clone, Default)]
 pub struct SymbolTable {
     label_to_symbol: HashMap<Label, Symbol>,

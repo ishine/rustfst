@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implement `SerializableSemiring` for `ProbabilityWeight`
 - Add support for `SymbolTable` serialization while serializing a FST in binary format.
 - Implement Composition operation. Added support to LookAhead filter.
+- W is now a trait parameter of all the Fst traits instead of an associated type.
+- Re-organized most of the algorithms into their own modules.
+- All the lazy fsts except `rm_epsilon` are now Send and Sync.
+- Remove the `TrIterator` in favor of the `get_trs` method in the CoreFst trait.
 
 ### Changed
 - `fst_convert` now consumes its input. Use `fst_convert_from_ref` to pass a borrow.
@@ -25,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove `MutableFst` trait bound from input of `shortest_path`.
 - `ArcMap` now takes an immutable mapper as parameter.
 - Use anyhow instead of failure for errors.
+- Renamed Arc as Tr (for transition)
+- Renamed DynamicFst as LazyFst
+- Semiring impls are required to be 'static
+- SymbolTable are now wrapped in std::sync::Arc (instead of Rc)
+- renamed unset_input_symbols and unset_output_symbols to take_*_symbols
+- static FST struct are now Send and Sync
+- `final_weight` method of the `CoreFst` trait now returns a copy instead of a reference.
+- Fix an issue in `SccQueue` which made the `is_empty()` call super slow. As a result, an important speed-up can be observed when running the `shortest_path` algorithm.
+- `ComposeFst` now clonable.
 
 ### Fixed
 - Fix olabel display while drawing a FST if no symbol table is provided

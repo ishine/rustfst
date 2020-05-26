@@ -3,23 +3,24 @@ use crate::fst_traits::AllocableFst;
 use crate::semirings::Semiring;
 use crate::StateId;
 use anyhow::Result;
+use std::sync::Arc;
 
-impl<W: 'static + Semiring> AllocableFst for VectorFst<W> {
-    fn reserve_arcs(&mut self, source: usize, additional: usize) -> Result<()> {
-        self.states
+impl<W: 'static + Semiring> AllocableFst<W> for VectorFst<W> {
+    fn reserve_trs(&mut self, source: usize, additional: usize) -> Result<()> {
+        let trs = &mut self
+            .states
             .get_mut(source)
             .ok_or_else(|| format_err!("State {:?} doesn't exist", source))?
-            .arcs
-            .reserve(additional);
+            .trs;
+
+        Arc::make_mut(&mut trs.0).reserve(additional);
         Ok(())
     }
 
     #[inline]
-    unsafe fn reserve_arcs_unchecked(&mut self, source: usize, additional: usize) {
-        self.states
-            .get_unchecked_mut(source)
-            .arcs
-            .reserve(additional)
+    unsafe fn reserve_trs_unchecked(&mut self, source: usize, additional: usize) {
+        let trs = &mut self.states.get_unchecked_mut(source).trs;
+        Arc::make_mut(&mut trs.0).reserve(additional)
     }
 
     #[inline]
@@ -30,7 +31,7 @@ impl<W: 'static + Semiring> AllocableFst for VectorFst<W> {
     fn shrink_to_fit(&mut self) {
         self.states.shrink_to_fit();
         for state in self.states.iter_mut() {
-            state.arcs.shrink_to_fit();
+            Arc::make_mut(&mut state.trs.0).shrink_to_fit();
         }
     }
 
@@ -39,18 +40,19 @@ impl<W: 'static + Semiring> AllocableFst for VectorFst<W> {
         self.states.shrink_to_fit()
     }
 
-    fn shrink_to_fit_arcs(&mut self, source: StateId) -> Result<()> {
-        self.states
+    fn shrink_to_fit_trs(&mut self, source: StateId) -> Result<()> {
+        let trs = &mut self
+            .states
             .get_mut(source)
             .ok_or_else(|| format_err!("State {:?} doesn't exist", source))?
-            .arcs
-            .shrink_to_fit();
+            .trs;
+        Arc::make_mut(&mut trs.0).shrink_to_fit();
         Ok(())
     }
 
     #[inline]
-    unsafe fn shrink_to_fit_arcs_unchecked(&mut self, source: StateId) {
-        self.states.get_unchecked_mut(source).arcs.shrink_to_fit()
+    unsafe fn shrink_to_fit_trs_unchecked(&mut self, source: StateId) {
+        Arc::make_mut(&mut self.states.get_unchecked_mut(source).trs.0).shrink_to_fit()
     }
 
     #[inline]
@@ -58,17 +60,18 @@ impl<W: 'static + Semiring> AllocableFst for VectorFst<W> {
         self.states.capacity()
     }
 
-    fn arcs_capacity(&self, source: StateId) -> Result<usize> {
+    fn trs_capacity(&self, source: StateId) -> Result<usize> {
         Ok(self
             .states
             .get(source)
             .ok_or_else(|| format_err!("State {:?} doesn't exist", source))?
-            .arcs
+            .trs
+            .0
             .capacity())
     }
 
     #[inline]
-    unsafe fn arcs_capacity_unchecked(&self, source: StateId) -> usize {
-        self.states.get_unchecked(source).arcs.capacity()
+    unsafe fn trs_capacity_unchecked(&self, source: StateId) -> usize {
+        self.states.get_unchecked(source).trs.0.capacity()
     }
 }

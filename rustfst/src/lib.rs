@@ -33,6 +33,9 @@
 //! ```rust
 //! use anyhow::Result;
 //! use rustfst::prelude::*;
+//! use rustfst::algorithms::determinize::{DeterminizeType, determinize};
+//! use rustfst::algorithms::rm_epsilon::rm_epsilon;
+//! use std::sync::Arc;
 //!
 //! fn main() -> Result<()> {
 //!     // Creates a empty wFST
@@ -46,11 +49,11 @@
 //!     // Set s0 as the start state
 //!     fst.set_start(s0)?;
 //!
-//!     // Add an arc from s0 to s1
-//!     fst.add_arc(s0, Arc::new(3, 5, 10.0, s1))?;
+//!     // Add a transition from s0 to s1
+//!     fst.add_tr(s0, Tr::new(3, 5, 10.0, s1))?;
 //!
-//!     // Add an arc from s0 to s2
-//!     fst.add_arc(s0, Arc::new(5, 7, 18.0, s2))?;
+//!     // Add a transition from s0 to s2
+//!     fst.add_tr(s0, Tr::new(5, 7, 18.0, s2))?;
 //!
 //!     // Set s1 and s2 as final states
 //!     fst.set_final(s1, 31.0)?;
@@ -77,7 +80,7 @@
 //!     rm_epsilon(&mut fst)?;
 //!
 //!     // - Compute an equivalent FST but deterministic.
-//!     fst = determinize(&fst, DeterminizeType::DeterminizeFunctional)?;
+//!     fst = determinize(Arc::new(fst), DeterminizeType::DeterminizeFunctional)?;
 //!
 //!     Ok(())
 //! }
@@ -100,11 +103,13 @@ extern crate serde;
 extern crate serde_json;
 
 pub use crate::drawing_config::DrawingConfig;
-pub use crate::fst_path::FstPath;
+pub use crate::fst_path::{check_path_in_fst, FstPath};
 pub use crate::symbol_table::SymbolTable;
 
-pub use self::arc::Arc;
+pub use self::tr::Tr;
+pub use self::trs::{Trs, TrsConst, TrsVec};
 
+pub use crate::semirings::Semiring;
 #[cfg(test)]
 use doc_comment::doc_comment;
 
@@ -117,7 +122,7 @@ mod tests_openfst;
 
 mod symbol_table;
 
-/// Type used for the input label and output label of an arc in a wFST -> usize
+/// Type used for the input label and output label of a transition in a wFST -> usize
 pub type Label = usize;
 /// Symbol to map in the Symbol Table -> String
 pub type Symbol = String;
@@ -136,11 +141,11 @@ pub mod utils;
 /// Provides algorithms that are generic to all wFST.
 pub mod algorithms;
 
-/// Implementation of the transitions inside a wFST.
-mod arc;
 /// Provides the `FstProperties` struct and some utils functions around it.
 /// Useful to assert some properties on a Fst.
 pub mod fst_properties;
+/// Implementation of the transitions inside a wFST.
+mod tr;
 
 #[macro_use]
 /// Provides traits that must be implemented to be able to use generic algorithms.
@@ -160,12 +165,12 @@ pub const KDELTA: f32 = 1.0f32 / 1024.0f32;
 
 /// Module re-exporting most of the objects from this crate.
 pub mod prelude {
-    pub use crate::algorithms::arc_compares::*;
+    pub use crate::algorithms::tr_compares::*;
     pub use crate::algorithms::*;
-    pub use crate::arc::Arc;
     pub use crate::fst_impls::*;
     pub use crate::fst_traits::*;
     pub use crate::semirings::*;
+    pub use crate::tr::Tr;
 }
 
 mod proptest_fst;
@@ -173,3 +178,5 @@ mod proptest_fst;
 pub(crate) static NO_LABEL: Label = std::usize::MAX;
 pub(crate) static NO_STATE_ID: StateId = std::usize::MAX;
 pub(crate) static UNASSIGNED: usize = std::usize::MAX;
+
+pub mod trs;

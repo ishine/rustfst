@@ -5,51 +5,54 @@ use anyhow::Result;
 
 use crate::fst_traits::ExpandedFst;
 use crate::semirings::Semiring;
-use crate::{Arc, StateId};
+use crate::{StateId, Tr, Trs};
+use std::marker::PhantomData;
 
-struct Isomorphism<'a, W: Semiring, F1: ExpandedFst<W = W>, F2: ExpandedFst<W = W>> {
+struct Isomorphism<'a, W: Semiring, F1: ExpandedFst<W>, F2: ExpandedFst<W>> {
     fst_1: &'a F1,
     fst_2: &'a F2,
     state_pairs: Vec<Option<StateId>>,
     queue: VecDeque<(StateId, StateId)>,
+    w: PhantomData<W>,
 }
 
-/// Compare arcs in the order input label, output label, weight and nextstate.
-pub fn arc_compare<W: Semiring>(arc_1: &Arc<W>, arc_2: &Arc<W>) -> Ordering {
-    if arc_1.ilabel < arc_2.ilabel {
+/// Compare trs in the order input label, output label, weight and nextstate.
+pub fn tr_compare<W: Semiring>(tr_1: &Tr<W>, tr_2: &Tr<W>) -> Ordering {
+    if tr_1.ilabel < tr_2.ilabel {
         return Ordering::Less;
     }
-    if arc_1.ilabel > arc_2.ilabel {
+    if tr_1.ilabel > tr_2.ilabel {
         return Ordering::Greater;
     }
-    if arc_1.olabel < arc_2.olabel {
+    if tr_1.olabel < tr_2.olabel {
         return Ordering::Less;
     }
-    if arc_1.olabel > arc_2.olabel {
+    if tr_1.olabel > tr_2.olabel {
         return Ordering::Greater;
     }
-    if arc_1.weight < arc_2.weight {
+    if tr_1.weight < tr_2.weight {
         return Ordering::Less;
     }
-    if arc_1.weight > arc_2.weight {
+    if tr_1.weight > tr_2.weight {
         return Ordering::Greater;
     }
-    if arc_1.nextstate < arc_2.nextstate {
+    if tr_1.nextstate < tr_2.nextstate {
         return Ordering::Less;
     }
-    if arc_1.nextstate > arc_2.nextstate {
+    if tr_1.nextstate > tr_2.nextstate {
         return Ordering::Greater;
     }
     Ordering::Equal
 }
 
-impl<'a, W: Semiring, F1: ExpandedFst<W = W>, F2: ExpandedFst<W = W>> Isomorphism<'a, W, F1, F2> {
+impl<'a, W: Semiring, F1: ExpandedFst<W>, F2: ExpandedFst<W>> Isomorphism<'a, W, F1, F2> {
     fn new(fst_1: &'a F1, fst_2: &'a F2) -> Self {
         Self {
             fst_1,
             fst_2,
             state_pairs: vec![None; fst_1.num_states()],
             queue: VecDeque::new(),
+            w: PhantomData,
         }
     }
 
@@ -70,22 +73,24 @@ impl<'a, W: Semiring, F1: ExpandedFst<W = W>, F2: ExpandedFst<W = W>> Isomorphis
             return Ok(false);
         }
 
-        let narcs1 = self.fst_1.num_arcs(s1)?;
-        let narcs2 = self.fst_2.num_arcs(s2)?;
+        let ntrs1 = self.fst_1.num_trs(s1)?;
+        let ntrs2 = self.fst_2.num_trs(s2)?;
 
-        if narcs1 != narcs2 {
+        if ntrs1 != ntrs2 {
             return Ok(false);
         }
 
-        let mut arcs1: Vec<_> = self.fst_1.arcs_iter(s1)?.collect();
-        let mut arcs2: Vec<_> = self.fst_2.arcs_iter(s2)?.collect();
+        let trs1_owner = self.fst_1.get_trs(s1)?;
+        let mut trs1: Vec<_> = trs1_owner.trs().iter().collect();
+        let trs2_owner = self.fst_2.get_trs(s2)?;
+        let mut trs2: Vec<_> = trs2_owner.trs().iter().collect();
 
-        arcs1.sort_by(|a, b| arc_compare(a, b));
-        arcs2.sort_by(|a, b| arc_compare(a, b));
+        trs1.sort_by(|a, b| tr_compare(a, b));
+        trs2.sort_by(|a, b| tr_compare(a, b));
 
-        for i in 0..arcs1.len() {
-            let arc1 = arcs1[i];
-            let arc2 = arcs2[i];
+        for i in 0..trs1.len() {
+            let arc1 = trs1[i];
+            let arc2 = trs2[i];
             if arc1.ilabel != arc2.ilabel {
                 return Ok(false);
             }
@@ -99,7 +104,7 @@ impl<'a, W: Semiring, F1: ExpandedFst<W = W>, F2: ExpandedFst<W = W>> Isomorphis
                 return Ok(false);
             }
             if i > 0 {
-                let arc0 = arcs1[i - 1];
+                let arc0 = trs1[i - 1];
                 if arc1 == arc0 {
                     bail!("Isomorphic: Non-determinism as an unweighted automaton")
                 }
@@ -141,8 +146,8 @@ impl<'a, W: Semiring, F1: ExpandedFst<W = W>, F2: ExpandedFst<W = W>> Isomorphis
 pub fn isomorphic<W, F1, F2>(fst_1: &F1, fst_2: &F2) -> Result<bool>
 where
     W: Semiring,
-    F1: ExpandedFst<W = W>,
-    F2: ExpandedFst<W = W>,
+    F1: ExpandedFst<W>,
+    F2: ExpandedFst<W>,
 {
     let mut iso = Isomorphism::new(fst_1, fst_2);
     iso.isomorphic()
@@ -156,7 +161,7 @@ mod test {
     use crate::fst_impls::VectorFst;
     use crate::fst_traits::{MutableFst, SerializableFst};
     use crate::semirings::{LogWeight, Semiring};
-    use crate::Arc;
+    use crate::Tr;
 
     #[test]
     fn test_isomorphic_1() -> Result<()> {
@@ -168,7 +173,7 @@ mod test {
         let mut fst_2 = fst_1.clone();
         assert!(isomorphic(&fst_1, &fst_2)?);
 
-        fst_2.add_arc(0, Arc::new(33, 45, LogWeight::new(0.3), 1))?;
+        fst_2.add_tr(0, Tr::new(33, 45, LogWeight::new(0.3), 1))?;
         assert!(!isomorphic(&fst_1, &fst_2)?);
 
         Ok(())

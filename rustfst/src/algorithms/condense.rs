@@ -1,19 +1,20 @@
+use anyhow::Result;
+
+use crate::algorithms::dfs_visit::dfs_visit;
+use crate::algorithms::tr_filters::AnyTrFilter;
 use crate::algorithms::visitors::SccVisitor;
 use crate::fst_traits::{ExpandedFst, Fst, MutableFst};
-
-use crate::algorithms::arc_filters::AnyArcFilter;
-use crate::algorithms::dfs_visit::dfs_visit;
 use crate::semirings::Semiring;
-use anyhow::Result;
+use crate::Trs;
 
 // Returns an acyclic FST where each SCC in the input FST has been condensed to
 // a single state with transitions between SCCs retained and within SCCs
 // dropped. Also populates 'scc' with a mapping from input to output states.
-pub fn condense<FI: Fst + ExpandedFst, FO: MutableFst<W = FI::W>>(
+pub fn condense<W: Semiring, FI: Fst<W> + ExpandedFst<W>, FO: MutableFst<W>>(
     ifst: &FI,
 ) -> Result<(Vec<i32>, FO)> {
     let mut visitor = SccVisitor::new(ifst, true, false);
-    dfs_visit(ifst, &mut visitor, &AnyArcFilter {}, false);
+    dfs_visit(ifst, &mut visitor, &AnyTrFilter {}, false);
     let scc = visitor.scc.unwrap();
     let mut ofst = FO::new();
     if let Some(max) = scc.iter().max() {
@@ -31,12 +32,12 @@ pub fn condense<FI: Fst + ExpandedFst, FO: MutableFst<W = FI::W>>(
                         None => ofst.set_final_unchecked(c, final_weight.clone()),
                     };
                 }
-                for arc in ifst.arcs_iter_unchecked(s) {
-                    let nextc = scc[arc.nextstate] as usize;
+                for tr in ifst.get_trs_unchecked(s).trs() {
+                    let nextc = scc[tr.nextstate] as usize;
                     if nextc != c {
-                        let mut condensed_arc = arc.clone();
-                        condensed_arc.nextstate = nextc;
-                        ofst.add_arc_unchecked(c, condensed_arc);
+                        let mut condensed_tr = tr.clone();
+                        condensed_tr.nextstate = nextc;
+                        ofst.add_tr_unchecked(c, condensed_tr);
                     }
                 }
             }

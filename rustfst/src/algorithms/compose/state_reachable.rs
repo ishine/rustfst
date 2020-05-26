@@ -1,13 +1,14 @@
-use crate::algorithms::arc_filters::AnyArcFilter;
 use crate::algorithms::compose::IntervalReachVisitor;
 use crate::algorithms::compose::IntervalSet;
 use crate::algorithms::condense;
 use crate::algorithms::dfs_visit::dfs_visit;
+use crate::algorithms::tr_filters::AnyTrFilter;
 use crate::fst_impls::VectorFst;
 use crate::fst_traits::{CoreFst, ExpandedFst};
 use crate::StateId;
 
 use crate::fst_properties::FstProperties;
+use crate::semirings::Semiring;
 use anyhow::Result;
 
 static UNASSIGNED: usize = std::usize::MAX;
@@ -22,10 +23,7 @@ pub struct StateReachable {
 }
 
 impl StateReachable {
-    pub fn new<F: ExpandedFst>(fst: &F) -> Result<Self>
-    where
-        F::W: 'static,
-    {
+    pub fn new<W: Semiring, F: ExpandedFst<W>>(fst: &F) -> Result<Self> {
         let props = fst.properties()?;
         let acyclic = props.contains(FstProperties::ACYCLIC);
         if acyclic {
@@ -35,10 +33,7 @@ impl StateReachable {
         }
     }
 
-    pub fn new_cyclic<F: ExpandedFst>(fst: &F) -> Result<Self>
-    where
-        F::W: 'static,
-    {
+    pub fn new_cyclic<W: Semiring, F: ExpandedFst<W>>(fst: &F) -> Result<Self> {
         let (scc, cfst): (_, VectorFst<_>) = condense(fst).unwrap();
         let reachable = StateReachable::new_acyclic(&cfst);
         let mut nscc = vec![];
@@ -71,9 +66,9 @@ impl StateReachable {
         Ok(Self { isets, state2index })
     }
 
-    pub fn new_acyclic<F: ExpandedFst>(fst: &F) -> Self {
+    pub fn new_acyclic<W: Semiring, F: ExpandedFst<W>>(fst: &F) -> Self {
         let mut reach_visitor = IntervalReachVisitor::new(fst);
-        dfs_visit(fst, &mut reach_visitor, &AnyArcFilter {}, false);
+        dfs_visit(fst, &mut reach_visitor, &AnyTrFilter {}, false);
         Self {
             isets: reach_visitor.isets,
             state2index: reach_visitor.state2index,

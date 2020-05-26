@@ -1,10 +1,13 @@
 use crate::fst_traits::{AllocableFst, ExpandedFst, Fst, MutableFst};
+use crate::semirings::Semiring;
+use crate::Trs;
 
 /// Generic method to convert an Fst into any other types implementing the MutableFst trait.
-pub fn fst_convert_from_ref<F1, F2>(ifst: &F1) -> F2
+pub fn fst_convert_from_ref<W, F1, F2>(ifst: &F1) -> F2
 where
-    F1: Fst,
-    F2: MutableFst<W = F1::W> + AllocableFst,
+    W: Semiring,
+    F1: Fst<W>,
+    F2: MutableFst<W> + AllocableFst<W>,
 {
     let mut ofst = F2::new();
 
@@ -16,10 +19,10 @@ where
 
         for data in ifst.fst_iter() {
             unsafe {
-                ofst.reserve_arcs_unchecked(data.state_id, data.num_arcs);
+                ofst.reserve_trs_unchecked(data.state_id, data.num_trs);
             }
-            for arc in data.arcs {
-                unsafe { ofst.add_arc_unchecked(data.state_id, arc.clone()) };
+            for tr in data.trs.trs() {
+                unsafe { ofst.add_tr_unchecked(data.state_id, tr.clone()) };
             }
 
             if let Some(final_weight) = data.final_weight {
@@ -34,10 +37,11 @@ where
 }
 
 /// Generic method to convert an Fst into any other types implementing the MutableFst trait.
-pub fn fst_convert<F1, F2>(ifst: F1) -> F2
+pub fn fst_convert<W, F1, F2>(ifst: F1) -> F2
 where
-    F1: ExpandedFst,
-    F2: MutableFst<W = F1::W> + AllocableFst,
+    W: Semiring,
+    F1: ExpandedFst<W>,
+    F2: MutableFst<W> + AllocableFst<W>,
 {
     let mut ofst = F2::new();
     ofst.add_states(ifst.num_states());
@@ -49,10 +53,10 @@ where
 
         for fst_iter_data in ifst.fst_into_iter() {
             unsafe {
-                ofst.reserve_arcs_unchecked(fst_iter_data.state_id, fst_iter_data.num_arcs);
+                ofst.reserve_trs_unchecked(fst_iter_data.state_id, fst_iter_data.num_trs);
             }
-            for arc in fst_iter_data.arcs {
-                unsafe { ofst.add_arc_unchecked(fst_iter_data.state_id, arc) }
+            for tr in fst_iter_data.trs {
+                unsafe { ofst.add_tr_unchecked(fst_iter_data.state_id, tr) }
             }
 
             if let Some(w) = fst_iter_data.final_weight {

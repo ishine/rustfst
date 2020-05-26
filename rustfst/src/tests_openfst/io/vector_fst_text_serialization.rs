@@ -7,9 +7,9 @@ use crate::semirings::SerializableSemiring;
 use crate::tests_openfst::io::generate_symbol_table;
 use crate::tests_openfst::FstTestData;
 
-pub fn test_vector_fst_text_serialization<W>(test_data: &FstTestData<VectorFst<W>>) -> Result<()>
+pub fn test_vector_fst_text_serialization<W>(test_data: &FstTestData<W, VectorFst<W>>) -> Result<()>
 where
-    W: SerializableSemiring + 'static,
+    W: SerializableSemiring,
 {
     let dir = tempdir()?;
 
@@ -28,10 +28,10 @@ where
 }
 
 pub fn test_vector_fst_text_serialization_with_symt<W>(
-    test_data: &FstTestData<VectorFst<W>>,
+    test_data: &FstTestData<W, VectorFst<W>>,
 ) -> Result<()>
 where
-    W: SerializableSemiring + 'static,
+    W: SerializableSemiring,
 {
     let dir = tempdir()?;
 
@@ -47,8 +47,8 @@ where
 
     // Text serialization doesn't include the symbol table.
     let mut raw_without_symt = raw_with_symt;
-    raw_without_symt.unset_input_symbols();
-    raw_without_symt.unset_output_symbols();
+    raw_without_symt.take_input_symbols();
+    raw_without_symt.take_output_symbols();
 
     assert_eq!(
         raw_without_symt,

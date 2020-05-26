@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::Result;
 
@@ -9,9 +9,9 @@ use crate::semirings::{SerializableSemiring, WeightQuantize};
 use crate::tests_openfst::FstTestData;
 use crate::SymbolTable;
 
-pub fn test_const_fst_convert_convert<W>(test_data: &FstTestData<VectorFst<W>>) -> Result<()>
+pub fn test_const_fst_convert_convert<W>(test_data: &FstTestData<W, VectorFst<W>>) -> Result<()>
 where
-    W: SerializableSemiring + WeightQuantize + 'static,
+    W: SerializableSemiring + WeightQuantize,
 {
     let mut raw_fst = test_data.raw.clone();
 
@@ -22,8 +22,8 @@ where
         osymt.add_symbol("b");
         osymt.add_symbol("c");
 
-        raw_fst.set_input_symbols(Rc::new(isymt));
-        raw_fst.set_output_symbols(Rc::new(osymt));
+        raw_fst.set_input_symbols(Arc::new(isymt));
+        raw_fst.set_output_symbols(Arc::new(osymt));
     }
 
     let const_fst: ConstFst<_> = raw_fst.clone().into();

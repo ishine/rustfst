@@ -4,15 +4,14 @@ mod tests {
 
     use anyhow::Result;
 
-    use crate::arc::Arc;
     use crate::fst_impls::VectorFst;
     use crate::fst_traits::{
-        ArcIterator, CoreFst, ExpandedFst, FinalStatesIterator, Fst, MutableArcIterator,
-        MutableFst, SerializableFst, StateIterator,
+        CoreFst, ExpandedFst, Fst, MutableFst, SerializableFst, StateIterator,
     };
     use crate::semirings::{ProbabilityWeight, Semiring, TropicalWeight};
-    use crate::SymbolTable;
-    use std::rc::Rc;
+    use crate::tr::Tr;
+    use crate::{SymbolTable, Trs};
+    use std::sync::Arc;
 
     #[test]
     fn test_small_fst() -> Result<()> {
@@ -24,39 +23,32 @@ mod tests {
 
         fst.set_start(s1)?;
 
-        // Arcs
-        let arc_1 = Arc::new(3, 5, 10.0, s2);
-        fst.add_arc(s1, arc_1.clone())?;
+        // Trs
+        let tr_1 = Tr::new(3, 5, 10.0, s2);
+        fst.add_tr(s1, tr_1.clone())?;
 
-        assert_eq!(fst.num_arcs(s1).unwrap(), 1);
+        assert_eq!(fst.num_trs(s1).unwrap(), 1);
 
-        let arc_2 = Arc::new(5, 7, 18.0, s2);
-        fst.add_arc(s1, arc_2.clone())?;
-        assert_eq!(fst.num_arcs(s1).unwrap(), 2);
-        assert_eq!(fst.arcs_iter(s1)?.count(), 2);
+        let tr_2 = Tr::new(5, 7, 18.0, s2);
+        fst.add_tr(s1, tr_2.clone())?;
+        assert_eq!(fst.num_trs(s1).unwrap(), 2);
+        assert_eq!(fst.get_trs(s1)?.trs().iter().count(), 2);
 
-        // Iterates on arcs leaving s1
-        let mut it_s1 = fst.arcs_iter(s1)?;
+        // Iterates on trs leaving s1
+        let it_s1 = fst.get_trs(s1)?;
+        assert_eq!(it_s1.len(), 2);
+        assert_eq!(tr_1, it_s1.trs()[0]);
+        assert_eq!(tr_2, it_s1.trs()[1]);
 
-        let arc = it_s1.next().ok_or_else(|| format_err!("Missing arc"))?;
-        assert_eq!(arc_1, *arc);
+        // Iterates on trs leaving s2
+        let it_s2 = fst.get_trs(s2)?;
 
-        let arc = it_s1.next().ok_or_else(|| format_err!("Missing arc"))?;
-        assert_eq!(arc_2, *arc);
-
-        let arc = it_s1.next();
-        assert!(arc.is_none());
-
-        // Iterates on arcs leaving s2
-        let mut it_s2 = fst.arcs_iter(s2)?;
-
-        let d = it_s2.next();
-        assert!(d.is_none());
+        assert_eq!(it_s2.len(), 0);
         Ok(())
     }
 
     #[test]
-    fn test_mutable_iter_arcs_small() -> Result<()> {
+    fn test_mutable_iter_trs_small() -> Result<()> {
         let mut fst = VectorFst::<ProbabilityWeight>::new();
 
         // States
@@ -65,29 +57,25 @@ mod tests {
 
         fst.set_start(s1)?;
 
-        // Arcs
-        let arc_1 = Arc::new(3, 5, 10.0, s2);
-        fst.add_arc(s1, arc_1.clone())?;
-        let arc_2 = Arc::new(5, 7, 18.0, s2);
-        fst.add_arc(s1, arc_2.clone())?;
+        // Trs
+        let tr_1 = Tr::new(3, 5, 10.0, s2);
+        fst.add_tr(s1, tr_1.clone())?;
+        let tr_2 = Tr::new(5, 7, 18.0, s2);
+        fst.add_tr(s1, tr_2.clone())?;
 
-        let new_arc_1 = Arc::new(15, 29, 33.0, s2 + 55);
+        let new_tr_1 = Tr::new(15, 29, 33.0, s2 + 55);
 
-        // Modify first arc leaving s1
-        fst.arcs_iter_mut(s1)?
+        // Modify first transition leaving s1
+        fst.tr_iter_mut(s1)?
             .next()
-            .ok_or_else(|| format_err!("Missing arc"))?
-            .set_value(&new_arc_1);
+            .ok_or_else(|| format_err!("Missing tr"))?
+            .set_value(&new_tr_1);
 
-        let mut it_s1 = fst.arcs_iter(s1)?;
+        let it_s1 = fst.get_trs(s1)?;
+        assert_eq!(new_tr_1, it_s1[0]);
+        assert_eq!(tr_2, it_s1[1]);
+        assert_eq!(it_s1.len(), 2);
 
-        let arc = it_s1.next().ok_or_else(|| format_err!("Missing arc"))?;
-        assert_eq!(new_arc_1, *arc);
-
-        let arc = it_s1.next().ok_or_else(|| format_err!("Missing arc"))?;
-        assert_eq!(arc_2, *arc);
-
-        assert!(it_s1.next().is_none());
         Ok(())
     }
 
@@ -172,32 +160,32 @@ mod tests {
             .iter()
             .enumerate()
             .all(|(idx, state_id)| fst.final_weight(*state_id).unwrap()
-                == Some(&ProbabilityWeight::new(idx as f32))));
+                == Some(ProbabilityWeight::new(idx as f32))));
         Ok(())
     }
 
     #[test]
-    fn test_del_state_arcs() -> Result<()> {
+    fn test_del_state_trs() -> Result<()> {
         let mut fst = VectorFst::<ProbabilityWeight>::new();
 
         let s1 = fst.add_state();
         let s2 = fst.add_state();
 
-        fst.add_arc(s1, Arc::new(0, 0, ProbabilityWeight::one(), s2))?;
-        fst.add_arc(s2, Arc::new(0, 0, ProbabilityWeight::one(), s1))?;
-        fst.add_arc(s2, Arc::new(0, 0, ProbabilityWeight::one(), s2))?;
+        fst.add_tr(s1, Tr::new(0, 0, ProbabilityWeight::one(), s2))?;
+        fst.add_tr(s2, Tr::new(0, 0, ProbabilityWeight::one(), s1))?;
+        fst.add_tr(s2, Tr::new(0, 0, ProbabilityWeight::one(), s2))?;
 
-        assert_eq!(fst.num_arcs(s1)?, 1);
-        assert_eq!(fst.num_arcs(s2)?, 2);
-        assert_eq!(fst.arcs_iter(s1)?.count(), 1);
-        assert_eq!(fst.arcs_iter(s2)?.count(), 2);
+        assert_eq!(fst.num_trs(s1)?, 1);
+        assert_eq!(fst.num_trs(s2)?, 2);
+        assert_eq!(fst.get_trs(s1)?.len(), 1);
+        assert_eq!(fst.get_trs(s2)?.len(), 2);
 
         fst.del_state(s1)?;
 
-        assert_eq!(fst.num_arcs(0)?, 1);
+        assert_eq!(fst.num_trs(0)?, 1);
 
         let only_state = fst.states_iter().next().unwrap();
-        assert_eq!(fst.arcs_iter(only_state)?.count(), 1);
+        assert_eq!(fst.get_trs(only_state)?.len(), 1);
         Ok(())
     }
 
@@ -284,9 +272,9 @@ mod tests {
         let s1 = fst.add_state();
         let s2 = fst.add_state();
 
-        fst.add_arc(s1, Arc::new(0, 0, ProbabilityWeight::one(), s2))?;
-        fst.add_arc(s2, Arc::new(0, 0, ProbabilityWeight::one(), s1))?;
-        fst.add_arc(s2, Arc::new(0, 0, ProbabilityWeight::one(), s2))?;
+        fst.add_tr(s1, Tr::new(0, 0, ProbabilityWeight::one(), s2))?;
+        fst.add_tr(s2, Tr::new(0, 0, ProbabilityWeight::one(), s1))?;
+        fst.add_tr(s2, Tr::new(0, 0, ProbabilityWeight::one(), s2))?;
 
         fst.set_start(s1)?;
         fst.set_final(s2, ProbabilityWeight::one())?;
@@ -305,9 +293,9 @@ mod tests {
         let s1 = fst.add_state();
         let s2 = fst.add_state();
 
-        fst.add_arc(s1, Arc::new(1, 0, ProbabilityWeight::one(), s2))?;
-        fst.add_arc(s2, Arc::new(2, 0, ProbabilityWeight::one(), s1))?;
-        fst.add_arc(s2, Arc::new(3, 0, ProbabilityWeight::one(), s2))?;
+        fst.add_tr(s1, Tr::new(1, 0, ProbabilityWeight::one(), s2))?;
+        fst.add_tr(s2, Tr::new(2, 0, ProbabilityWeight::one(), s1))?;
+        fst.add_tr(s2, Tr::new(3, 0, ProbabilityWeight::one(), s2))?;
 
         fst.set_start(s1)?;
         fst.set_final(s2, ProbabilityWeight::one())?;
@@ -319,7 +307,7 @@ mod tests {
             symt.add_symbol("b"); // 2
             symt.add_symbol("c"); // 3
 
-            fst.set_input_symbols(Rc::new(symt));
+            fst.set_input_symbols(Arc::new(symt));
         }
         {
             let symt = fst.input_symbols();
@@ -331,7 +319,7 @@ mod tests {
         // Test output symbol table
         {
             let symt = SymbolTable::new();
-            fst.set_output_symbols(Rc::new(symt));
+            fst.set_output_symbols(Arc::new(symt));
         }
         {
             let symt = fst.output_symbols();

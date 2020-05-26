@@ -5,16 +5,17 @@ use crate::fst_impls::{ConstFst, VectorFst};
 use crate::fst_traits::{ExpandedFst, MutableFst};
 use crate::semirings::{SerializableSemiring, WeightQuantize};
 use crate::tests_openfst::FstTestData;
+use crate::{Semiring, Trs};
 
-fn do_test_fst_into_iterator<F: ExpandedFst>(fst: F) -> Result<()> {
+fn do_test_fst_into_iterator<W: Semiring, F: ExpandedFst<W>>(fst: F) -> Result<()> {
     let mut fst_data_ref = vec![];
 
     for state in 0..fst.num_states() {
         fst_data_ref.push((
             state,
-            fst.arcs_iter(state)?.cloned().collect_vec(),
-            fst.final_weight(state)?.cloned(),
-            fst.num_arcs(state)?,
+            fst.get_trs(state)?.trs().iter().cloned().collect_vec(),
+            fst.final_weight(state)?,
+            fst.num_trs(state)?,
         ));
     }
 
@@ -22,9 +23,9 @@ fn do_test_fst_into_iterator<F: ExpandedFst>(fst: F) -> Result<()> {
     for fst_iter_data in fst.fst_into_iter() {
         fst_data.push((
             fst_iter_data.state_id,
-            fst_iter_data.arcs.collect_vec(),
+            fst_iter_data.trs.collect_vec(),
             fst_iter_data.final_weight,
-            fst_iter_data.num_arcs,
+            fst_iter_data.num_trs,
         ));
     }
     assert_eq!(fst_data, fst_data_ref);
@@ -32,15 +33,15 @@ fn do_test_fst_into_iterator<F: ExpandedFst>(fst: F) -> Result<()> {
     Ok(())
 }
 
-fn do_test_fst_iterator<F: ExpandedFst>(fst: &F) -> Result<()> {
+fn do_test_fst_iterator<W: Semiring, F: ExpandedFst<W>>(fst: &F) -> Result<()> {
     let mut fst_data_ref = vec![];
 
     for state in 0..fst.num_states() {
         fst_data_ref.push((
             state,
-            fst.arcs_iter(state)?.collect_vec(),
+            fst.get_trs(state)?.trs().iter().cloned().collect_vec(),
             fst.final_weight(state)?,
-            fst.num_arcs(state)?,
+            fst.num_trs(state)?,
         ));
     }
 
@@ -48,9 +49,9 @@ fn do_test_fst_iterator<F: ExpandedFst>(fst: &F) -> Result<()> {
     for data in fst.fst_iter() {
         fst_data.push((
             data.state_id,
-            data.arcs.collect_vec(),
+            data.trs.trs().iter().cloned().collect_vec(),
             data.final_weight,
-            data.num_arcs,
+            data.num_trs,
         ));
     }
     assert_eq!(fst_data, fst_data_ref);
@@ -58,14 +59,14 @@ fn do_test_fst_iterator<F: ExpandedFst>(fst: &F) -> Result<()> {
     Ok(())
 }
 
-fn do_test_fst_iterator_mut<F: MutableFst>(mut fst: F) -> Result<()> {
+fn do_test_fst_iterator_mut<W: Semiring, F: MutableFst<W>>(mut fst: F) -> Result<()> {
     let mut fst_data_ref = vec![];
 
     for state in 0..fst.num_states() {
         fst_data_ref.push((
             state,
-            fst.arcs_iter(state)?.cloned().collect_vec(),
-            fst.final_weight(state)?.cloned(),
+            fst.get_trs(state)?.trs().iter().cloned().collect_vec(),
+            fst.final_weight(state)?,
         ));
     }
 
@@ -73,7 +74,7 @@ fn do_test_fst_iterator_mut<F: MutableFst>(mut fst: F) -> Result<()> {
     for data in fst.fst_iter_mut() {
         fst_data.push((
             data.state_id,
-            data.arcs.map(|v| v.clone()).collect_vec(),
+            data.trs.map(|v| v.clone()).collect_vec(),
             data.final_weight.cloned(),
         ));
     }
@@ -82,9 +83,9 @@ fn do_test_fst_iterator_mut<F: MutableFst>(mut fst: F) -> Result<()> {
     Ok(())
 }
 
-pub fn test_fst_into_iterator_const<W>(test_data: &FstTestData<VectorFst<W>>) -> Result<()>
+pub fn test_fst_into_iterator_const<W>(test_data: &FstTestData<W, VectorFst<W>>) -> Result<()>
 where
-    W: SerializableSemiring + WeightQuantize + 'static,
+    W: SerializableSemiring + WeightQuantize,
 {
     let raw_fst: ConstFst<_> = test_data.raw.clone().into();
 
@@ -94,9 +95,9 @@ where
     Ok(())
 }
 
-pub fn test_fst_into_iterator_vector<W>(test_data: &FstTestData<VectorFst<W>>) -> Result<()>
+pub fn test_fst_into_iterator_vector<W>(test_data: &FstTestData<W, VectorFst<W>>) -> Result<()>
 where
-    W: SerializableSemiring + WeightQuantize + 'static,
+    W: SerializableSemiring + WeightQuantize,
 {
     let raw_fst = test_data.raw.clone();
 

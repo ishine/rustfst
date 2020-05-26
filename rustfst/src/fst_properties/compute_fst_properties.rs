@@ -3,16 +3,16 @@ use std::collections::HashSet;
 use anyhow::Result;
 use unsafe_unwrap::UnsafeUnwrap;
 
-use crate::algorithms::arc_filters::AnyArcFilter;
 use crate::algorithms::dfs_visit::dfs_visit;
+use crate::algorithms::tr_filters::AnyTrFilter;
 use crate::algorithms::visitors::SccVisitor;
 use crate::fst_properties::FstProperties;
-use crate::fst_traits::{ExpandedFst, Fst};
+use crate::fst_traits::ExpandedFst;
 use crate::semirings::Semiring;
-use crate::Arc;
+use crate::{Tr, Trs};
 
 /// Computes all the FstProperties of the FST bit don't attach them to the FST.
-pub fn compute_fst_properties<F: Fst + ExpandedFst>(fst: &F) -> Result<FstProperties> {
+pub fn compute_fst_properties<W: Semiring, F: ExpandedFst<W>>(fst: &F) -> Result<FstProperties> {
     let states: Vec<_> = fst.states_iter().collect();
     let mut comp_props = FstProperties::empty();
 
@@ -26,7 +26,7 @@ pub fn compute_fst_properties<F: Fst + ExpandedFst>(fst: &F) -> Result<FstProper
         | FstProperties::NOT_COACCESSIBLE;
 
     let mut visitor = SccVisitor::new(fst, true, true);
-    dfs_visit(fst, &mut visitor, &AnyArcFilter {}, false);
+    dfs_visit(fst, &mut visitor, &AnyTrFilter {}, false);
     let sccs = unsafe { &visitor.scc.unsafe_unwrap() };
 
     // Retrieves props computed in the DFS.
@@ -49,76 +49,76 @@ pub fn compute_fst_properties<F: Fst + ExpandedFst>(fst: &F) -> Result<FstProper
     for state in states {
         let mut ilabels = HashSet::new();
         let mut olabels = HashSet::new();
-        let mut prev_arc: Option<&Arc<F::W>> = None;
-        for arc in fst.arcs_iter(state)? {
-            // There is already an outgoing arc with this ilabel
-            if ilabels.contains(&arc.ilabel) {
+        let mut prev_tr: Option<&Tr<W>> = None;
+        for tr in fst.get_trs(state)?.trs() {
+            // There is already an outgoing transition with this ilabel
+            if ilabels.contains(&tr.ilabel) {
                 comp_props |= FstProperties::NOT_I_DETERMINISTIC;
                 comp_props &= !FstProperties::I_DETERMINISTIC;
             }
 
-            // There is already an outgoing arc with this olabel
-            if olabels.contains(&arc.olabel) {
+            // There is already an outgoing transition with this olabel
+            if olabels.contains(&tr.olabel) {
                 comp_props |= FstProperties::NOT_O_DETERMINISTIC;
                 comp_props &= !FstProperties::O_DETERMINISTIC;
             }
 
-            if arc.ilabel != arc.olabel {
+            if tr.ilabel != tr.olabel {
                 comp_props |= FstProperties::NOT_ACCEPTOR;
                 comp_props &= !FstProperties::ACCEPTOR;
             }
 
-            if arc.ilabel == 0 && arc.olabel == 0 {
+            if tr.ilabel == 0 && tr.olabel == 0 {
                 comp_props |= FstProperties::EPSILONS;
                 comp_props &= !FstProperties::NO_EPSILONS;
             }
 
-            if arc.ilabel == 0 {
+            if tr.ilabel == 0 {
                 comp_props |= FstProperties::I_EPSILONS;
                 comp_props &= !FstProperties::NO_I_EPSILONS;
             }
 
-            if arc.olabel == 0 {
+            if tr.olabel == 0 {
                 comp_props |= FstProperties::O_EPSILONS;
                 comp_props &= !FstProperties::NO_O_EPSILONS;
             }
 
-            // Not first arc
-            if let Some(_prev_arc) = prev_arc {
-                if arc.ilabel < _prev_arc.ilabel {
+            // Not first transition
+            if let Some(_prev_tr) = prev_tr {
+                if tr.ilabel < _prev_tr.ilabel {
                     comp_props |= FstProperties::NOT_I_LABEL_SORTED;
                     comp_props &= !FstProperties::I_LABEL_SORTED;
                 }
 
-                if arc.olabel < _prev_arc.olabel {
+                if tr.olabel < _prev_tr.olabel {
                     comp_props |= FstProperties::NOT_O_LABEL_SORTED;
                     comp_props &= !FstProperties::O_LABEL_SORTED;
                 }
             }
 
-            if !arc.weight.is_one() && !arc.weight.is_zero() {
+            if !tr.weight.is_one() && !tr.weight.is_zero() {
                 comp_props |= FstProperties::WEIGHTED;
                 comp_props &= !FstProperties::UNWEIGHTED;
 
-                if sccs[state] == sccs[arc.nextstate] {
+                if sccs[state] == sccs[tr.nextstate] {
                     comp_props |= FstProperties::WEIGHTED_CYCLES;
                     comp_props &= !FstProperties::UNWEIGHTED_CYCLES;
                 }
             }
 
-            if arc.nextstate <= state {
+            if tr.nextstate <= state {
                 comp_props |= FstProperties::NOT_TOP_SORTED;
                 comp_props &= !FstProperties::TOP_SORTED;
             }
 
-            if arc.nextstate != state + 1 {
+            if tr.nextstate != state + 1 {
                 comp_props |= FstProperties::NOT_STRING;
                 comp_props &= !FstProperties::STRING;
             }
 
-            prev_arc = Some(arc);
-            ilabels.insert(arc.ilabel);
-            olabels.insert(arc.olabel);
+            prev_tr = Some(tr);
+            ilabels.insert(tr.ilabel);
+            olabels.insert(tr.olabel);
         }
 
         if nfinal > 0 {
@@ -132,7 +132,7 @@ pub fn compute_fst_properties<F: Fst + ExpandedFst>(fst: &F) -> Result<FstProper
                 comp_props &= !FstProperties::UNWEIGHTED;
             }
             nfinal += 1;
-        } else if fst.num_arcs(state)? != 1 {
+        } else if fst.num_trs(state)? != 1 {
             comp_props |= FstProperties::NOT_STRING;
             comp_props &= !FstProperties::STRING;
         }

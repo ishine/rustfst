@@ -1,9 +1,10 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use anyhow::{bail, format_err, Result, Context};
+use anyhow::{bail, format_err, Context, Result};
 
-use crate::fst_traits::{ExpandedFst, MutableFst};
+use crate::fst_traits::MutableFst;
+use crate::semirings::Semiring;
 use crate::StateId;
 
 fn iterator_to_hashmap<I>(pairs: I) -> Result<HashMap<StateId, StateId>>
@@ -44,9 +45,10 @@ where
 /// # Ok(())
 /// # }
 /// ```
-pub fn relabel_pairs<F, I, J>(fst: &mut F, ipairs: I, opairs: J) -> Result<()>
+pub fn relabel_pairs<W, F, I, J>(fst: &mut F, ipairs: I, opairs: J) -> Result<()>
 where
-    F: ExpandedFst + MutableFst,
+    W: Semiring,
+    F: MutableFst<W>,
     I: IntoIterator<Item = (StateId, StateId)>,
     J: IntoIterator<Item = (StateId, StateId)>,
 {
@@ -58,13 +60,13 @@ where
 
     let states: Vec<_> = fst.states_iter().collect();
     for state_id in states {
-        for arc in fst.arcs_iter_mut(state_id)? {
-            if let Some(v) = map_ilabels.get(&arc.ilabel) {
-                arc.ilabel = *v;
+        for tr in fst.tr_iter_mut(state_id)? {
+            if let Some(v) = map_ilabels.get(&tr.ilabel) {
+                tr.ilabel = *v;
             }
 
-            if let Some(v) = map_olabels.get(&arc.olabel) {
-                arc.olabel = *v;
+            if let Some(v) = map_olabels.get(&tr.olabel) {
+                tr.olabel = *v;
             }
         }
     }
@@ -73,10 +75,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::arc::Arc;
     use crate::fst_impls::VectorFst;
     use crate::semirings::{IntegerWeight, Semiring};
+    use crate::tr::Tr;
+
+    use super::*;
 
     #[test]
     fn test_projection_input_generic() -> Result<()> {
@@ -87,10 +90,10 @@ mod tests {
         let s2 = fst.add_state();
         fst.set_start(s0)?;
 
-        fst.add_arc(s0, Arc::new(3, 18, 10, s1))?;
-        fst.add_arc(s0, Arc::new(2, 5, 10, s1))?;
-        fst.add_arc(s0, Arc::new(5, 9, 18, s2))?;
-        fst.add_arc(s0, Arc::new(5, 7, 18, s2))?;
+        fst.add_tr(s0, Tr::new(3, 18, 10, s1))?;
+        fst.add_tr(s0, Tr::new(2, 5, 10, s1))?;
+        fst.add_tr(s0, Tr::new(5, 9, 18, s2))?;
+        fst.add_tr(s0, Tr::new(5, 7, 18, s2))?;
         fst.set_final(s1, 31)?;
         fst.set_final(s2, 45)?;
 
@@ -102,10 +105,10 @@ mod tests {
         let s2 = expected_fst.add_state();
         expected_fst.set_start(s0)?;
 
-        expected_fst.add_arc(s0, Arc::new(45, 51, IntegerWeight::new(10), s1))?;
-        expected_fst.add_arc(s0, Arc::new(2, 75, IntegerWeight::new(10), s1))?;
-        expected_fst.add_arc(s0, Arc::new(75, 9, IntegerWeight::new(18), s2))?;
-        expected_fst.add_arc(s0, Arc::new(75, 85, IntegerWeight::new(18), s2))?;
+        expected_fst.add_tr(s0, Tr::new(45, 51, IntegerWeight::new(10), s1))?;
+        expected_fst.add_tr(s0, Tr::new(2, 75, IntegerWeight::new(10), s1))?;
+        expected_fst.add_tr(s0, Tr::new(75, 9, IntegerWeight::new(18), s2))?;
+        expected_fst.add_tr(s0, Tr::new(75, 85, IntegerWeight::new(18), s2))?;
         expected_fst.set_final(s1, IntegerWeight::new(31))?;
         expected_fst.set_final(s2, IntegerWeight::new(45))?;
 

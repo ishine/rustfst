@@ -1,15 +1,18 @@
+use std::marker::PhantomData;
+
 use anyhow::Result;
 use unsafe_unwrap::UnsafeUnwrap;
 
-use crate::algorithms::arc_filters::AnyArcFilter;
 use crate::algorithms::dfs_visit::{dfs_visit, Visitor};
+use crate::algorithms::tr_filters::AnyTrFilter;
 use crate::fst_traits::Fst;
-use crate::fst_traits::{CoreFst, ExpandedFst, MutableFst};
-use crate::Arc;
+use crate::fst_traits::{ExpandedFst, MutableFst};
+use crate::semirings::Semiring;
 use crate::StateId;
+use crate::Tr;
 use crate::NO_STATE_ID;
 
-/// This operation trims an FST, removing states and arcs that are not on successful paths.
+/// This operation trims an FST, removing states and trs that are not on successful paths.
 ///
 /// # Example 1
 /// ```
@@ -45,9 +48,9 @@ use crate::NO_STATE_ID;
 ///
 /// ![connect_out](https://raw.githubusercontent.com/Garvys/rustfst-images-doc/master/images/connect_out.svg?sanitize=true)
 ///
-pub fn connect<F: ExpandedFst + MutableFst>(fst: &mut F) -> Result<()> {
+pub fn connect<W: Semiring, F: ExpandedFst<W> + MutableFst<W>>(fst: &mut F) -> Result<()> {
     let mut visitor = ConnectVisitor::new(fst);
-    dfs_visit(fst, &mut visitor, &AnyArcFilter {}, false);
+    dfs_visit(fst, &mut visitor, &AnyTrFilter {}, false);
     let mut dstates = Vec::with_capacity(visitor.access.len());
     for s in 0..visitor.access.len() {
         if !visitor.access[s] || !visitor.coaccess[s] {
@@ -58,7 +61,7 @@ pub fn connect<F: ExpandedFst + MutableFst>(fst: &mut F) -> Result<()> {
     Ok(())
 }
 
-struct ConnectVisitor<'a, F: Fst> {
+struct ConnectVisitor<'a, W: Semiring, F: Fst<W>> {
     access: Vec<bool>,
     coaccess: Vec<bool>,
     start: usize,
@@ -68,9 +71,10 @@ struct ConnectVisitor<'a, F: Fst> {
     lowlink: Vec<i32>,
     onstack: Vec<bool>,
     scc_stack: Vec<StateId>,
+    w: PhantomData<W>,
 }
 
-impl<'a, F: 'a + Fst + ExpandedFst> ConnectVisitor<'a, F> {
+impl<'a, W: Semiring, F: 'a + ExpandedFst<W>> ConnectVisitor<'a, W, F> {
     pub fn new(fst: &'a F) -> Self {
         let n = fst.num_states();
         Self {
@@ -83,11 +87,12 @@ impl<'a, F: 'a + Fst + ExpandedFst> ConnectVisitor<'a, F> {
             lowlink: vec![-1; n],
             onstack: vec![false; n],
             scc_stack: vec![],
+            w: PhantomData,
         }
     }
 }
 
-impl<'a, F: 'a + ExpandedFst> Visitor<'a, F> for ConnectVisitor<'a, F> {
+impl<'a, W: Semiring, F: 'a + ExpandedFst<W>> Visitor<'a, W, F> for ConnectVisitor<'a, W, F> {
     fn init_visit(&mut self, _fst: &'a F) {}
 
     fn init_state(&mut self, s: usize, root: usize) -> bool {
@@ -100,12 +105,12 @@ impl<'a, F: 'a + ExpandedFst> Visitor<'a, F> for ConnectVisitor<'a, F> {
         true
     }
 
-    fn tree_arc(&mut self, _s: usize, _arc: &Arc<<F as CoreFst>::W>) -> bool {
+    fn tree_tr(&mut self, _s: usize, _tr: &Tr<W>) -> bool {
         true
     }
 
-    fn back_arc(&mut self, s: usize, arc: &Arc<<F as CoreFst>::W>) -> bool {
-        let t = arc.nextstate;
+    fn back_tr(&mut self, s: usize, tr: &Tr<W>) -> bool {
+        let t = tr.nextstate;
         if self.dfnumber[t] < self.lowlink[s] {
             self.lowlink[s] = self.dfnumber[t];
         }
@@ -115,8 +120,8 @@ impl<'a, F: 'a + ExpandedFst> Visitor<'a, F> for ConnectVisitor<'a, F> {
         true
     }
 
-    fn forward_or_cross_arc(&mut self, s: usize, arc: &Arc<<F as CoreFst>::W>) -> bool {
-        let t = arc.nextstate;
+    fn forward_or_cross_tr(&mut self, s: usize, tr: &Tr<W>) -> bool {
+        let t = tr.nextstate;
         if self.dfnumber[t] < self.dfnumber[s]
             && self.onstack[t]
             && self.dfnumber[t] < self.lowlink[s]
@@ -130,12 +135,7 @@ impl<'a, F: 'a + ExpandedFst> Visitor<'a, F> for ConnectVisitor<'a, F> {
     }
 
     #[inline]
-    fn finish_state(
-        &mut self,
-        s: usize,
-        parent: Option<usize>,
-        _arc: Option<&Arc<<F as CoreFst>::W>>,
-    ) {
+    fn finish_state(&mut self, s: usize, parent: Option<usize>, _tr: Option<&Tr<W>>) {
         if unsafe { self.fst.is_final_unchecked(s) } {
             self.coaccess[s] = true;
         }
@@ -181,11 +181,10 @@ impl<'a, F: 'a + ExpandedFst> Visitor<'a, F> for ConnectVisitor<'a, F> {
 
 #[cfg(test)]
 mod tests {
-    use crate::proptest_fst::proptest_fst;
+    use proptest::prelude::*;
 
     use crate::fst_properties::FstProperties;
-
-    use proptest::prelude::*;
+    use crate::proptest_fst::proptest_fst;
 
     use super::*;
 
